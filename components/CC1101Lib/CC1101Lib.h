@@ -222,11 +222,15 @@ namespace TI_CC1101
       SyncWordsBitDetected_16_Of_16_CarrierSenseAboveThreshold = 6, // 16/16 + carrier-sense above threshold
       SyncWordsBitDetected_30_Of_32_CarrierSenseAboveThreshold = 7  // 30/32 + carrier-sense above threshold
   };
-  enum class AddessCheckConfiguration
+  enum class AddressCheckConfiguration
   {
       None                              = 0, // No address check
       AddressCheck_NoBroadcast          = 1, // Address check, no broadcast
       AddressCheck_ZeroBroadcast        = 2, // Address check and 0 (0x00) broadcast
       AdressCheck_Zero_And_FF_BroadCast = 3  // Address check and 0 (0x00) and 255 (0xFF) broadcast
+  };
+  struct SpiConfig
+  {
+
   };
 } // namespace TI_CC1101

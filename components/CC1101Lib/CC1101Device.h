@@ -36,7 +36,7 @@ namespace TI_CC1101
         void SetCRC(bool shouldEnable);
         void SetCRCAutoFlush(bool shouldEnable);
         void SetSyncMode(SyncWordQualifierMode syncMode);
-        void SetAddressCheck(AddessCheckConfiguration addressCheckConfig);
+        void SetAddressCheck(AddressCheckConfiguration addressCheckConfig);
 
       protected:
         void waitForMisoLow();
