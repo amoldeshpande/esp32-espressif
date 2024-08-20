@@ -1,0 +1,13 @@
+BasedOnStyle: Microsoft
+
+NamespaceIndentation: All
+
+AlignConsecutiveAssignments:
+    Enabled: true
+    AcrossEmptyLines:true
+    AcrossComments: true
+
+AlignConsecutiveDeclarations:
+    Enabled: true
+    AcrossEmptyLines:true
+    AcrossComments: true
