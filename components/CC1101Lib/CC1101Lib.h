@@ -1,11 +1,10 @@
 #pragma once
-#include <stdint.h>
+#include "LocalTypes.h"
 namespace TI_CC1101
 {
     // Various configuration elements from the Texas Instruments CC1101 datasheet
     // https://www.ti.com/lit/ds/symlink/cc1101.pdf?ts=1704109305538
 
-    typedef uint8_t byte;
     namespace CC1101_CONFIG
     {
         // Table 42 - Command Strobes
@@ -230,23 +229,3 @@ namespace TI_CC1101
       AdressCheck_Zero_And_FF_BroadCast = 3  // Address check and 0 (0x00) and 255 (0xFF) broadcast
   };
 } // namespace TI_CC1101
-
-
-#define CER(exp)        {\
-	if(!(exp)) {\
-		bRet = false; \
-		goto Error; \
-	}\
-}
-#if defined(_DEBUG)
-// CheckBoolResultAssert
-#define CERA(exp)        {\
-	if(!(exp)) {\
-		bRet = false; \
-		assert(exp);
-		goto Error; \
-	}\
-}
-#else
-#define CERA CER
-#endif

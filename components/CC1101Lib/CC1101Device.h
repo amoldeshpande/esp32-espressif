@@ -7,6 +7,12 @@
 namespace TI_CC1101
 {
     class SpiDevice;
+    
+    struct CC110DeviceConfig
+    {
+        byte TxPin;
+        byte RxPin;
+    };
     class CC1101Device final
     {
       protected:
@@ -21,12 +27,12 @@ namespace TI_CC1101
         bool                       m_currentManchesterEnabled     = false;
         // PATABLE is 8 bytes
         byte                       m_PATABLE[8]                   = {0, 0, 0, 0, 0, 0, 0, 0};
-        std::shared_ptr<SpiDevice> m_SpiDevice;
+        std::shared_ptr<SpiDevice> m_spiDevice;
 
       public:
-        CC1101Device(std::shared_ptr<SpiDevice> spiDevice);
+        CC1101Device();
         ~CC1101Device();
-        void Init();
+        void Init(std::shared_ptr<SpiDevice> spiDevice);
         void Reset();
         void SetFrequency(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);

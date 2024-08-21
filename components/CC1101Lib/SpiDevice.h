@@ -1,5 +1,8 @@
 #pragma once
 #include <driver/spi_master.h>
+#include <driver/gpio.h>
+#include "LocalTypes.h"
+
 namespace TI_CC1101
 {
 
@@ -18,11 +21,11 @@ namespace TI_CC1101
   };
   struct SpiConfig
   {
-    int misoPin;
-    int mosiPin;
-    int clockPin;
-    int chipSelectPin;
-    int clockFrequency;
+    gpio_num_t misoPin;
+    gpio_num_t mosiPin;
+    gpio_num_t clockPin;
+    gpio_num_t chipSelectPin;
+    gpio_num_t clockFrequencyMHz;
     int queueSize; // number of parallel transactions 
     
     SpiMode spiMode;
@@ -32,14 +35,23 @@ namespace TI_CC1101
   class SpiDevice
   {
     protected:
-       spi_device_handle_t m_DeviceHandle; 
+       spi_device_handle_t m_DeviceHandle;
 
-       const int kDmaChannelToUse = 1; // 
-    public:
-        SpiDevice();
-        ~SpiDevice();
-        bool Init(const SpiConfig& cfg);
+       const int kDmaChannelToUse = 1; //
+       SpiConfig m_config;
+
+     public:
+       SpiDevice();
+       ~SpiDevice();
+       bool Init(const SpiConfig &cfg);
+
+       gpio_num_t MisoPin() { return m_config.misoPin;}
+       gpio_num_t MosiPin() { return m_config.mosiPin;}
+       gpio_num_t ClockPin() { return m_config.clockPin;}
+       gpio_num_t ChipSelectPin() { return m_config.chipSelectPin;}
+
+       bool WriteByte(byte toWrite);
 
   };
 
-}
+}//namespace

@@ -1,6 +1,8 @@
 BasedOnStyle: Microsoft
 
-NamespaceIndentation: All
+NamespaceIndentation: NI_All
+
+AllowShortFunctionsOnASingleLine: SFS_InlineOnly
 
 AlignConsecutiveAssignments:
     Enabled: true

@@ -1,3 +1,0 @@
-idf_component_register(SRCS CC1101Lib/CC1101Device.cpp CC1101Lib/SpiDevice.cpp
-                    REQUIRES driver  
-                    INCLUDE_DIRS ".")

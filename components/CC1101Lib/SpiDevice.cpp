@@ -1,11 +1,25 @@
 #include "CC1101Lib.h"
 #include "SpiDevice.h"
 
-bool TI_CC1101::SpiDevice::Init(const SpiConfig &cfg)
+namespace TI_CC1101
+{
+
+SpiDevice::SpiDevice()
+{
+}
+
+SpiDevice::~SpiDevice()
+{
+}
+
+bool SpiDevice::Init(const SpiConfig &cfg)
 {
     bool bRet = true;
     esp_err_t ret;
 
+    m_config = cfg;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
     spi_bus_config_t busConfig = {
         .mosi_io_num = cfg.mosiPin,
         .miso_io_num = cfg.misoPin,
@@ -23,18 +37,25 @@ bool TI_CC1101::SpiDevice::Init(const SpiConfig &cfg)
     };
     spi_device_interface_config_t deviceConfig = {
         .mode = static_cast<uint8_t>(cfg.spiMode),
-        .clock_speed_hz = cfg.clockFrequency,
+        .clock_speed_hz = cfg.clockFrequencyMHz*(1'000'000),
         .spics_io_num = cfg.chipSelectPin,
         .queue_size = cfg.queueSize
     };
+#pragma GCC diagnostic pop
 
     spi_host_device_t host_id = (cfg.spiHost == Esp32SPIHost::HSPI ? HSPI_HOST : VSPI_HOST);
     ret = spi_bus_initialize(host_id,  &busConfig,kDmaChannelToUse);
-    CERA(ret == ESP_OK);
+    CERA(ret);
 
     ret = spi_bus_add_device(host_id,&deviceConfig,&m_DeviceHandle);
-    CERA(ret == ESP_OK);
+    CERA(ret);
 
 Error:
     return bRet;
 }
+bool SpiDevice::WriteByte(byte toWrite)
+{
+    return false;
+}
+
+}//namespace
