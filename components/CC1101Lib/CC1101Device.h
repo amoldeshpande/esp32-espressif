@@ -1,28 +1,31 @@
 #pragma once
 #include <driver/spi_master.h>
 #include <vector>
+#include <memory>
 #include "CC1101Lib.h"
 
 namespace TI_CC1101
 {
-    class CC1101Device
+    class SpiDevice;
+    class CC1101Device final
     {
       protected:
         // 26 MHz crystal by default. Apparently it can be 27 as well according to docs.
-        const float            kDefaultOscillatorFrequencyMhz = 26;
-        const float            kFrequencyDivisor              = 2 << 16;
-        float                  m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMhz * (1'000'000);
+        const float                kDefaultOscillatorFrequencyMhz = 26;
+        const float                kFrequencyDivisor              = 2 << 16;
+        float                      m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMhz * (1'000'000);
         // see SetFrequency() below
-        float                  m_frequencyIncrement           = kDefaultOscillatorFrequencyMhz / kFrequencyDivisor;
-        ConfigValues::PATables m_currentPATable               = ConfigValues::PATables::PA_433;
-        ModulationType         m_currentModulationType        = ModulationType::FSK_2;
-        bool                   m_currentManchesterEnabled     = false;
+        float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMhz / kFrequencyDivisor;
+        ConfigValues::PATables     m_currentPATable               = ConfigValues::PATables::PA_433;
+        ModulationType             m_currentModulationType        = ModulationType::FSK_2;
+        bool                       m_currentManchesterEnabled     = false;
         // PATABLE is 8 bytes
-        byte                   m_PATABLE[8]                   = {0, 0, 0, 0, 0, 0, 0, 0};
-        spi_device_handle_t           m_SpiHandle;
+        byte                       m_PATABLE[8]                   = {0, 0, 0, 0, 0, 0, 0, 0};
+        std::shared_ptr<SpiDevice> m_SpiDevice;
 
       public:
-        CC1101Device(spi_device_handle_t spiHandle);
+        CC1101Device(std::shared_ptr<SpiDevice> spiDevice);
+        ~CC1101Device();
         void Init();
         void Reset();
         void SetFrequency(float frequencyMHz);

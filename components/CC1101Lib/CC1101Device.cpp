@@ -3,7 +3,7 @@
 
 namespace TI_CC1101
 {
-    CC1101Device::CC1101Device(spi_device_handle_t spiHandle)
+    CC1101Device::CC1101Device(std::shared_ptr<SpiDevice> spiDevice)
     {
     }
 

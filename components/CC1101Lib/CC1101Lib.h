@@ -229,8 +229,24 @@ namespace TI_CC1101
       AddressCheck_ZeroBroadcast        = 2, // Address check and 0 (0x00) broadcast
       AdressCheck_Zero_And_FF_BroadCast = 3  // Address check and 0 (0x00) and 255 (0xFF) broadcast
   };
-  struct SpiConfig
-  {
-
-  };
 } // namespace TI_CC1101
+
+
+#define CER(exp)        {\
+	if(!(exp)) {\
+		bRet = false; \
+		goto Error; \
+	}\
+}
+#if defined(_DEBUG)
+// CheckBoolResultAssert
+#define CERA(exp)        {\
+	if(!(exp)) {\
+		bRet = false; \
+		assert(exp);
+		goto Error; \
+	}\
+}
+#else
+#define CERA CER
+#endif
