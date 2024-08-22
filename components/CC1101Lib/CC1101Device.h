@@ -32,7 +32,7 @@ namespace TI_CC1101
       public:
         CC1101Device();
         ~CC1101Device();
-        void Init(std::shared_ptr<SpiDevice> spiDevice);
+        void Init(std::shared_ptr<SpiDevice> spiDevice,float crystalFrequencyHz = 0);
         void Reset();
         void SetFrequency(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
@@ -52,10 +52,10 @@ namespace TI_CC1101
         void digitalWrite();
         void delayMilliseconds(int millis);
         void delayMicroseconds(int micros);
-        void readRegister(byte address);
+        byte readRegister(byte address);
         void writeRegister(byte address, byte value);
-        void writeBurstRegister(byte address, std::vector<byte> &values);
-        byte setMultiLayerInductorPower(int outPower, std::vector<byte> &currentTable);
-        byte setwireWoundInductorPower(int outPower, std::vector<byte> &currentTable);
+        void writeBurstRegister(byte address, byte* values,int valueLen);
+        byte setMultiLayerInductorPower(int outPower, const byte* currentTable, int currentTableLen);
+        byte setWireWoundInductorPower(int outPower, const byte* currentTable, int currentTableLen);
     };
 } // namespace TI_CC1101

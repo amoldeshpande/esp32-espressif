@@ -8,73 +8,77 @@ namespace TI_CC1101
     namespace CC1101_CONFIG
     {
         // Table 42 - Command Strobes
-        const byte SRES    = 0x30;// Reset chip.
-        const byte SFSTXON = 0x31;// Enable and calibrate frequency synthesizer (if MCSM0.FS_AUTOCAL=1).  
-                                  // If in RX (with CCA): Go to a wait state where only the synthesizer is running(for quick RX / TX turnaround). 
-        const byte SXOFF   = 0x32;// Turn off crystal oscillator.
-        const byte SCAL    = 0x33;// Calibrate frequency synthesizer and turn it off. SCAL can be strobed from IDLE mode without setting manual calibration mode(MCSM0.FS_AUTOCAL= 0)
-        const byte SRX     = 0x34;// Enable RX. Perform calibration first if coming from IDLE and MCSM0.FS_AUTOCAL=1.
-        const byte STX     = 0x35;// In IDLE state: Enable TX. Perform calibration first if MCSM0.FS_AUTOCAL=1.
-                                  // If in RX state and CCA is enabled: Only go to TX if channel is clear.
-        const byte SIDLE   = 0x36;// Exit RX / TX, turn off frequency synthesizer and exit Wake-On-Radio mode if applicable.
-        const byte SAFC    = 0x37;// Perform AFC adjustment of the frequency synthesizer
-        const byte SWOR    = 0x38;// Start automatic RX polling sequence (Wake-on-Radio) as described in Section 19.5 if WORCTRL.RC_PD=0.
-        const byte SPWD    = 0x39;// Enter power down mode when CSn goes high.
-        const byte SFRX    = 0x3A;// Flush the RX FIFO buffer. Only issue SFRX in IDLE or RXFIFO_OVERFLOW states
-        const byte SFTX    = 0x3B;// Flush the TX FIFO buffer. Only issue SFTX in IDLE or TXFIFO_UNDERFLOW states.
-        const byte SWORRST = 0x3C;// Reset real time clock to Event1 value.
-        const byte SNOP    = 0x3D;// No operation. May be used to get access to the chip status byte.
+        const byte SRES    = 0x30; // Reset chip.
+        const byte SFSTXON = 0x31; // Enable and calibrate frequency synthesizer (if MCSM0.FS_AUTOCAL=1).
+                                   // If in RX (with CCA): Go to a wait state where only the synthesizer is running(for
+                                   // quick RX / TX turnaround).
+        const byte SXOFF   = 0x32; // Turn off crystal oscillator.
+        const byte SCAL = 0x33; // Calibrate frequency synthesizer and turn it off. SCAL can be strobed from IDLE mode
+                                // without setting manual calibration mode(MCSM0.FS_AUTOCAL= 0)
+        const byte SRX  = 0x34; // Enable RX. Perform calibration first if coming from IDLE and MCSM0.FS_AUTOCAL=1.
+        const byte STX  = 0x35; // In IDLE state: Enable TX. Perform calibration first if MCSM0.FS_AUTOCAL=1.
+                                // If in RX state and CCA is enabled: Only go to TX if channel is clear.
+        const byte SIDLE =
+            0x36; // Exit RX / TX, turn off frequency synthesizer and exit Wake-On-Radio mode if applicable.
+        const byte SAFC = 0x37; // Perform AFC adjustment of the frequency synthesizer
+        const byte SWOR = 0x38; // Start automatic RX polling sequence (Wake-on-Radio) as described in Section 19.5 if
+                                // WORCTRL.RC_PD=0.
+        const byte SPWD = 0x39; // Enter power down mode when CSn goes high.
+        const byte SFRX = 0x3A; // Flush the RX FIFO buffer. Only issue SFRX in IDLE or RXFIFO_OVERFLOW states
+        const byte SFTX = 0x3B; // Flush the TX FIFO buffer. Only issue SFTX in IDLE or TXFIFO_UNDERFLOW states.
+        const byte SWORRST = 0x3C; // Reset real time clock to Event1 value.
+        const byte SNOP    = 0x3D; // No operation. May be used to get access to the chip status byte.
 
         // Table 43 - Configuration Registers
-        const byte IOCFG2     = 0x00;// GDO2 output pin configuration
-        const byte IOCFG1     = 0x01;// GDO1 output pin configuration
-        const byte IOCFG0     = 0x02;// GDO0 output pin configuration
-        const byte FIFOTHR    = 0x03;// RX FIFO and TX FIFO thresholds
-        const byte SYNC1      = 0x04;// Sync word, high byte
-        const byte SYNC0      = 0x05;// Sync word, low byte
-        const byte PKTLEN     = 0x06;// Packet length
-        const byte PKTCTRL1   = 0x07;// Packet automation control
-        const byte PKTCTRL0   = 0x08;// Packet automation control
-        const byte ADDR       = 0x09;// Device address
-        const byte CHANNR     = 0x0A;// Channel number
-        const byte FSCTRL1    = 0x0B;// Frequency synthesizer control
-        const byte FSCTRL0    = 0x0C;// Frequency synthesizer control
-        const byte FREQ2      = 0x0D;// Frequency control word, high byte
-        const byte FREQ1      = 0x0E;// Frequency control word, middle byte
-        const byte FREQ0      = 0x0F;// Frequency control word, low byte
-        const byte MDMCFG4    = 0x10;// Modem configuration
-        const byte MDMCFG3    = 0x11;// Modem configuration
-        const byte MDMCFG2    = 0x12;// Modem configuration
-        const byte MDMCFG1    = 0x13;// Modem configuration
-        const byte MDMCFG0    = 0x14;// Modem configuration
-        const byte DEVIATN    = 0x15;// Modem deviation setting
-        const byte MCSM2      = 0x16;// Main Radio Control State Machine configuration
-        const byte MCSM1      = 0x17;// Main Radio Control State Machine configuration
-        const byte MCSM0      = 0x18;// Main Radio Control State Machine configuration
-        const byte FOCCFG     = 0x19;// Frequency Offset Compensation configuration
-        const byte BSCFG      = 0x1A;// Bit Synchronization configuration
-        const byte AGCCTRL2   = 0x1B;// AGC control
-        const byte AGCCTRL1   = 0x1C;// AGC control
-        const byte AGCCTRL0   = 0x1D;// AGC control
-        const byte WOREVT1    = 0x1E;// High byte Event 0 timeout
-        const byte WOREVT0    = 0x1F;// Low byte Event 0 timeout
-        const byte WORCTRL    = 0x20;// Wake On Radio control
-        const byte FREND1     = 0x21;// Front end RX configuration
-        const byte FREND0     = 0x22;// Front end TX configuration
-        const byte FSCAL3     = 0x23;// Frequency synthesizer calibration
-        const byte FSCAL2     = 0x24;// Frequency synthesizer calibration
-        const byte FSCAL1     = 0x25;// Frequency synthesizer calibration
-        const byte FSCAL0     = 0x26;// Frequency synthesizer calibration
-        const byte RCCTRL1    = 0x27;// RC oscillator configuration
-        const byte RCCTRL0    = 0x28;// RC oscillator configuration
-        const byte FSTEST     = 0x29;// Frequency synthesizer calibration control
-        const byte PTEST      = 0x2A;// Production test
-        const byte AGCTEST    = 0x2B; // AGC test
-        const byte TEST2      = 0x2C; // Various test settings
-        const byte TEST1      = 0x2D;// Various test settings
-        const byte TEST0      = 0x2E;// Various test settings
+        const byte IOCFG2   = 0x00; // GDO2 output pin configuration
+        const byte IOCFG1   = 0x01; // GDO1 output pin configuration
+        const byte IOCFG0   = 0x02; // GDO0 output pin configuration
+        const byte FIFOTHR  = 0x03; // RX FIFO and TX FIFO thresholds
+        const byte SYNC1    = 0x04; // Sync word, high byte
+        const byte SYNC0    = 0x05; // Sync word, low byte
+        const byte PKTLEN   = 0x06; // Packet length
+        const byte PKTCTRL1 = 0x07; // Packet automation control
+        const byte PKTCTRL0 = 0x08; // Packet automation control
+        const byte ADDR     = 0x09; // Device address
+        const byte CHANNR   = 0x0A; // Channel number
+        const byte FSCTRL1  = 0x0B; // Frequency synthesizer control
+        const byte FSCTRL0  = 0x0C; // Frequency synthesizer control
+        const byte FREQ2    = 0x0D; // Frequency control word, high byte
+        const byte FREQ1    = 0x0E; // Frequency control word, middle byte
+        const byte FREQ0    = 0x0F; // Frequency control word, low byte
+        const byte MDMCFG4  = 0x10; // Modem configuration
+        const byte MDMCFG3  = 0x11; // Modem configuration
+        const byte MDMCFG2  = 0x12; // Modem configuration
+        const byte MDMCFG1  = 0x13; // Modem configuration
+        const byte MDMCFG0  = 0x14; // Modem configuration
+        const byte DEVIATN  = 0x15; // Modem deviation setting
+        const byte MCSM2    = 0x16; // Main Radio Control State Machine configuration
+        const byte MCSM1    = 0x17; // Main Radio Control State Machine configuration
+        const byte MCSM0    = 0x18; // Main Radio Control State Machine configuration
+        const byte FOCCFG   = 0x19; // Frequency Offset Compensation configuration
+        const byte BSCFG    = 0x1A; // Bit Synchronization configuration
+        const byte AGCCTRL2 = 0x1B; // AGC control
+        const byte AGCCTRL1 = 0x1C; // AGC control
+        const byte AGCCTRL0 = 0x1D; // AGC control
+        const byte WOREVT1  = 0x1E; // High byte Event 0 timeout
+        const byte WOREVT0  = 0x1F; // Low byte Event 0 timeout
+        const byte WORCTRL  = 0x20; // Wake On Radio control
+        const byte FREND1   = 0x21; // Front end RX configuration
+        const byte FREND0   = 0x22; // Front end TX configuration
+        const byte FSCAL3   = 0x23; // Frequency synthesizer calibration
+        const byte FSCAL2   = 0x24; // Frequency synthesizer calibration
+        const byte FSCAL1   = 0x25; // Frequency synthesizer calibration
+        const byte FSCAL0   = 0x26; // Frequency synthesizer calibration
+        const byte RCCTRL1  = 0x27; // RC oscillator configuration
+        const byte RCCTRL0  = 0x28; // RC oscillator configuration
+        const byte FSTEST   = 0x29; // Frequency synthesizer calibration control
+        const byte PTEST    = 0x2A; // Production test
+        const byte AGCTEST  = 0x2B; // AGC test
+        const byte TEST2    = 0x2C; // Various test settings
+        const byte TEST1    = 0x2D; // Various test settings
+        const byte TEST0    = 0x2E; // Various test settings
 
-        //Table 44:Status Registers
+        // Table 44:Status Registers
         const byte PARTNUM        = 0x30; // Part number for CC1101
         const byte VERSION        = 0x31; // Current version number
         const byte FREQEST        = 0x32; // Frequency Offset Estimate
@@ -89,7 +93,12 @@ namespace TI_CC1101
         const byte RXBYTES        = 0x3B; // Overflow and number of bytes in the RX FIFO
         const byte RCCTRL1_STATUS = 0x3C; // Last RC oscillator calibration result
         const byte RCCTRL0_STATUS = 0x3D; // Last RC oscillator calibration result
-    }
+
+        // Addresses of other components
+        const byte PATABLE = 0x3E;
+        const byte TXFIFO  = 0x3F;
+        const byte RXFIFO  = 0x3F;
+    } // namespace CC1101_CONFIG
 
   namespace ConfigValues
   {

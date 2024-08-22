@@ -1,8 +1,10 @@
 BasedOnStyle: Microsoft
 
-NamespaceIndentation: NI_All
+NamespaceIndentation: All
 
-AllowShortFunctionsOnASingleLine: SFS_InlineOnly
+AllowShortFunctionsOnASingleLine: InlineOnly
+
+IndentCaseLabels: true
 
 AlignConsecutiveAssignments:
     Enabled: true

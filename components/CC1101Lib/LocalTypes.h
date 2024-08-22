@@ -5,6 +5,8 @@ namespace TI_CC1101
 {
     typedef uint8_t byte;
 
+#define ARRAYSIZE(a) ((sizeof(a) / sizeof(*(a))) / \
+                     static_cast<size_t>(!(sizeof(a) % sizeof(*(a)))))
 
 #define CER(exp)        {\
 	if((exp) != ESP_OK) {\
