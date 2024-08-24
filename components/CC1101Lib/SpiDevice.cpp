@@ -10,6 +10,8 @@ SpiDevice::SpiDevice()
 
 SpiDevice::~SpiDevice()
 {
+    spi_bus_remove_device(m_DeviceHandle);
+    spi_bus_free(m_config.spiHost == Esp32SPIHost::HSPI ? HSPI_HOST : VSPI_HOST);
 }
 
 bool SpiDevice::Init(const SpiConfig &cfg)
@@ -36,10 +38,15 @@ bool SpiDevice::Init(const SpiConfig &cfg)
         .intr_flags = 0
     };
     spi_device_interface_config_t deviceConfig = {
+        // No command bits
+        .command_bits = 0,
+        .address_bits = 0,
         .mode = static_cast<uint8_t>(cfg.spiMode),
         .clock_speed_hz = cfg.clockFrequencyMHz*(1'000'000),
         .spics_io_num = cfg.chipSelectPin,
-        .queue_size = cfg.queueSize
+        .queue_size = cfg.queueSize,
+        .pre_cb = nullptr,
+        .post_cb = nullptr
     };
 #pragma GCC diagnostic pop
 
@@ -54,6 +61,19 @@ Error:
     return bRet;
 }
 bool SpiDevice::WriteByte(byte toWrite)
+{
+    byte statusByte;
+    spi_transaction_t transaction = {
+        .flags = 0,
+        .length = 8,
+        .rxlength = 0,
+        .tx_buffer = &toWrite,
+    };
+
+    return (spi_device_transmit(m_DeviceHandle,&transaction) == ESP_OK);
+}
+
+bool SpiDevice::WriteByteToAddress(byte address, byte value)
 {
     return false;
 }

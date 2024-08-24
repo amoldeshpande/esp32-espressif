@@ -41,14 +41,16 @@ namespace TI_CC1101
         CERA(gpio_set_level(m_spiDevice->ClockPin(),1));
         CERA(gpio_set_level(m_spiDevice->MosiPin(),0));
 
-        CERA(gpio_set_level(m_spiDevice->ChipSelectPin(),0));
+        CBRA(lowerChipSelect());
         delayMicroseconds(5);
-        CERA(gpio_set_level(m_spiDevice->ChipSelectPin(),1));
+        CBRA(raiseChipSelect());
         delayMicroseconds(5);
-        CERA(gpio_set_level(m_spiDevice->ChipSelectPin(),0));
+        CBRA(lowerChipSelect());
         delayMicroseconds(40);
-        CERA(gpio_set_level(m_spiDevice->ChipSelectPin(),1));
+        CBRA(raiseChipSelect());
 
+        // This is a command strobe so we only need the lower 6 bits, i.e, the address.
+        // See page 32, Section 10.4
         CBRA(m_spiDevice->WriteByte(CC1101_CONFIG::SRES));
 
         waitForMisoLow();
@@ -110,8 +112,8 @@ namespace TI_CC1101
         byte modemCFG = readRegister(CC1101_CONFIG::MDMCFG4);
         byte DataRate = (byte)(modemCFG & 0xF);
 
-        // Page 35 table in an array. The exponent is the horizontal stride (4 columns corresponding to the bit values
-        // 00,01,10,11) Mantissa is the vertical stride (4 columns corresponding to the bit values 00,01,10,11)
+        // Page 35 table in an array. The exponent is the horizontal stride (4 columns corresponding to the bit values 00,01,10,11) 
+        // Mantissa is the vertical stride (4 rows corresponding to the bit values 00,01,10,11)
         float constantPart     = m_oscillatorFrequencyHz / 8;
         float allowableBWKHz[] = {
             constantPart / (4 * 1), constantPart / (4 * 2), constantPart / (4 * 4), constantPart / (4 * 8),
@@ -455,6 +457,16 @@ namespace TI_CC1101
         byte result = (byte)((currentPktCtrl1 & 0b11111100) | (int)addressCheckConfig);
 
         writeRegister(CC1101_CONFIG::PKTCTRL1, result);
+    }
+
+    bool CC1101Device::lowerChipSelect()
+    {
+        return (gpio_set_level(m_spiDevice->ChipSelectPin(),0) == ESP_OK);
+    }
+
+    bool CC1101Device::raiseChipSelect()
+    {
+        return (gpio_set_level(m_spiDevice->ChipSelectPin(),1) == ESP_OK);
     }
 
     void CC1101Device::waitForMisoLow()

@@ -29,10 +29,15 @@ namespace TI_CC1101
         byte                       m_PATABLE[8]                   = {0, 0, 0, 0, 0, 0, 0, 0};
         std::shared_ptr<SpiDevice> m_spiDevice;
 
+        const byte m_SpiHeaderByteWriteMask = 0b01111111; // Mask out high bit.
+        const byte m_SpiHeaderReadBit       = 0b10000000; // OR this in to set read bit in the header
+        const byte m_SpiNoBurstAccessMask   = 0b10111111; // No. 2 MSB is burst bit
+        const byte m_SpiBurstAccessBit      = 0b01000000; // OR this to set burst bit on
+
       public:
         CC1101Device();
         ~CC1101Device();
-        void Init(std::shared_ptr<SpiDevice> spiDevice,float crystalFrequencyHz = 0);
+        void Init(std::shared_ptr<SpiDevice> spiDevice, float crystalFrequencyHz = 0);
         void Reset();
         void SetFrequency(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
@@ -48,14 +53,16 @@ namespace TI_CC1101
         void SetAddressCheck(AddressCheckConfiguration addressCheckConfig);
 
       protected:
+        bool lowerChipSelect();
+        bool raiseChipSelect();
         void waitForMisoLow();
         void digitalWrite();
         void delayMilliseconds(int millis);
         void delayMicroseconds(int micros);
         byte readRegister(byte address);
         void writeRegister(byte address, byte value);
-        void writeBurstRegister(byte address, byte* values,int valueLen);
-        byte setMultiLayerInductorPower(int outPower, const byte* currentTable, int currentTableLen);
-        byte setWireWoundInductorPower(int outPower, const byte* currentTable, int currentTableLen);
+        void writeBurstRegister(byte address, byte *values, int valueLen);
+        byte setMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
+        byte setWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
     };
 } // namespace TI_CC1101

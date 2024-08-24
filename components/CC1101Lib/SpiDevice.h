@@ -37,7 +37,7 @@ namespace TI_CC1101
     protected:
        spi_device_handle_t m_DeviceHandle;
 
-       const int kDmaChannelToUse = 1; //
+       const int kDmaChannelToUse = 0; //no DMA (for now ?)
        SpiConfig m_config;
 
      public:
@@ -51,6 +51,7 @@ namespace TI_CC1101
        gpio_num_t ChipSelectPin() { return m_config.chipSelectPin;}
 
        bool WriteByte(byte toWrite);
+       bool WriteByteToAddress(byte address, byte value);
 
   };
 
