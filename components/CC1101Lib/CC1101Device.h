@@ -1,3 +1,17 @@
+// Copyright (C) 2024 Amol Deshpande
+// 
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// 
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+// 
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma once
 #include <driver/spi_master.h>
 #include <vector>
@@ -6,7 +20,7 @@
 
 namespace TI_CC1101
 {
-    class SpiDevice;
+    class SpiMaster;
     
     struct CC110DeviceConfig
     {
@@ -27,17 +41,17 @@ namespace TI_CC1101
         bool                       m_currentManchesterEnabled     = false;
         // PATABLE is 8 bytes
         byte                       m_PATABLE[8]                   = {0, 0, 0, 0, 0, 0, 0, 0};
-        std::shared_ptr<SpiDevice> m_spiDevice;
+        std::shared_ptr<SpiMaster> m_spiMaster;
 
-        const byte m_SpiHeaderByteWriteMask = 0b01111111; // Mask out high bit.
-        const byte m_SpiHeaderReadBit       = 0b10000000; // OR this in to set read bit in the header
-        const byte m_SpiNoBurstAccessMask   = 0b10111111; // No. 2 MSB is burst bit
-        const byte m_SpiBurstAccessBit      = 0b01000000; // OR this to set burst bit on
+        const byte kSpiHeaderByteWriteMask = 0b01111111; // Mask out high bit.
+        const byte kSpiHeaderReadBit       = 0b10000000; // OR this in to set read bit in the header
+        const byte kSpiNoBurstAccessMask   = 0b10111111; // No. 2 MSB is burst bit
+        const byte kSpiBurstAccessBit      = 0b01000000; // OR this to set burst bit on
 
       public:
         CC1101Device();
         ~CC1101Device();
-        void Init(std::shared_ptr<SpiDevice> spiDevice, float crystalFrequencyHz = 0);
+        void Init(std::shared_ptr<SpiMaster> spiMaster, float crystalFrequencyHz = -1);
         void Reset();
         void SetFrequency(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
@@ -56,7 +70,7 @@ namespace TI_CC1101
         bool lowerChipSelect();
         bool raiseChipSelect();
         void waitForMisoLow();
-        void digitalWrite();
+        bool digitalWrite(int pin, uint32_t value);
         void delayMilliseconds(int millis);
         void delayMicroseconds(int micros);
         byte readRegister(byte address);

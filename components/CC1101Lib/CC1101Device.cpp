@@ -1,7 +1,25 @@
+// Copyright (C) 2024 Amol Deshpande
+// 
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// 
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+// 
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 #include <driver/rtc_io.h>
 #include "CC1101Lib.h"
 #include "CC1101Device.h"
-#include "SpiDevice.h"
+#include "SpiMaster.h"
+
+static const char *TAG = "CC110Device";
 
 namespace TI_CC1101
 {
@@ -13,9 +31,9 @@ namespace TI_CC1101
     {
     }
 
-    void CC1101Device::Init(std::shared_ptr<SpiDevice> spiDevice,  float crystalFrequencyHz)
+    void CC1101Device::Init(std::shared_ptr<SpiMaster> spiMaster,  float crystalFrequencyHz)
     {
-        m_spiDevice = spiDevice;
+        m_spiMaster = spiMaster;
         if(crystalFrequencyHz != 0)
         {
             m_oscillatorFrequencyHz = crystalFrequencyHz;
@@ -38,8 +56,8 @@ namespace TI_CC1101
         */
         bool bRet = true;
 
-        CERA(gpio_set_level(m_spiDevice->ClockPin(),1));
-        CERA(gpio_set_level(m_spiDevice->MosiPin(),0));
+        CERA(gpio_set_level(m_spiMaster->ClockPin(),1));
+        CERA(gpio_set_level(m_spiMaster->MosiPin(),0));
 
         CBRA(lowerChipSelect());
         delayMicroseconds(5);
@@ -51,7 +69,7 @@ namespace TI_CC1101
 
         // This is a command strobe so we only need the lower 6 bits, i.e, the address.
         // See page 32, Section 10.4
-        CBRA(m_spiDevice->WriteByte(CC1101_CONFIG::SRES));
+        CBRA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES));
 
         waitForMisoLow();
 
@@ -461,18 +479,23 @@ namespace TI_CC1101
 
     bool CC1101Device::lowerChipSelect()
     {
-        return (gpio_set_level(m_spiDevice->ChipSelectPin(),0) == ESP_OK);
+        return digitalWrite(m_spiMaster->ChipSelectPin(),0);
     }
 
     bool CC1101Device::raiseChipSelect()
     {
-        return (gpio_set_level(m_spiDevice->ChipSelectPin(),1) == ESP_OK);
+        return digitalWrite(m_spiMaster->ChipSelectPin(),1);
     }
 
     void CC1101Device::waitForMisoLow()
     {
-        while (gpio_get_level(m_spiDevice->MisoPin()) == 1)
+        while (gpio_get_level(m_spiMaster->MisoPin()) == 1)
             delayMicroseconds(2); // busy-ish wait
+    }
+
+    bool CC1101Device::digitalWrite(int pin, uint32_t value)
+    {
+        return (gpio_set_level(static_cast<gpio_num_t>(pin), value) == ESP_OK);
     }
 
     void CC1101Device::delayMilliseconds(int millis)
@@ -487,15 +510,35 @@ namespace TI_CC1101
 
     byte CC1101Device::readRegister(byte address)
     {
-        return 0;
+        address &= 0b00111111; //clear R/W and burst bit
+        if(address >= CC1101_CONFIG::PARTNUM && address <= CC1101_CONFIG::RCCTRL0_STATUS)
+        {
+            address |= kSpiBurstAccessBit;
+        }
+        address |= kSpiHeaderReadBit;
+
+        lowerChipSelect();
+        waitForMisoLow();
+        byte value = m_spiMaster->WriteByte(address);
+
+        return value;
     }
 
     void CC1101Device::writeRegister(byte address, byte value)
     {
+        lowerChipSelect();
+        waitForMisoLow();
+        m_spiMaster->WriteByteToAddress(address,value);
+        raiseChipSelect();
     }
 
     void CC1101Device::writeBurstRegister(byte address, byte *values, int valueLen)
     {
+        lowerChipSelect();
+        waitForMisoLow();
+        m_spiMaster->WriteByte(address | kSpiBurstAccessBit);
+        m_spiMaster->WriteBytes(values,valueLen);
+        raiseChipSelect();
     }
 
     byte CC1101Device::setMultiLayerInductorPower(int outputPower, const byte *currentTable, int currentTableLen)

@@ -1,5 +1,6 @@
 BasedOnStyle: Microsoft
 
+ColumnLimit: 0
 NamespaceIndentation: All
 
 AllowShortFunctionsOnASingleLine: InlineOnly

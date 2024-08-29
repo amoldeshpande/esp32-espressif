@@ -1,3 +1,18 @@
+// Copyright (C) 2024 Amol Deshpande
+// 
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// 
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+// 
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 #pragma once
 #include "LocalTypes.h"
 namespace TI_CC1101
@@ -13,19 +28,16 @@ namespace TI_CC1101
                                    // If in RX (with CCA): Go to a wait state where only the synthesizer is running(for
                                    // quick RX / TX turnaround).
         const byte SXOFF   = 0x32; // Turn off crystal oscillator.
-        const byte SCAL = 0x33; // Calibrate frequency synthesizer and turn it off. SCAL can be strobed from IDLE mode
-                                // without setting manual calibration mode(MCSM0.FS_AUTOCAL= 0)
-        const byte SRX  = 0x34; // Enable RX. Perform calibration first if coming from IDLE and MCSM0.FS_AUTOCAL=1.
-        const byte STX  = 0x35; // In IDLE state: Enable TX. Perform calibration first if MCSM0.FS_AUTOCAL=1.
-                                // If in RX state and CCA is enabled: Only go to TX if channel is clear.
-        const byte SIDLE =
-            0x36; // Exit RX / TX, turn off frequency synthesizer and exit Wake-On-Radio mode if applicable.
-        const byte SAFC = 0x37; // Perform AFC adjustment of the frequency synthesizer
-        const byte SWOR = 0x38; // Start automatic RX polling sequence (Wake-on-Radio) as described in Section 19.5 if
-                                // WORCTRL.RC_PD=0.
-        const byte SPWD = 0x39; // Enter power down mode when CSn goes high.
-        const byte SFRX = 0x3A; // Flush the RX FIFO buffer. Only issue SFRX in IDLE or RXFIFO_OVERFLOW states
-        const byte SFTX = 0x3B; // Flush the TX FIFO buffer. Only issue SFTX in IDLE or TXFIFO_UNDERFLOW states.
+        const byte SCAL    = 0x33; // Calibrate frequency synthesizer and turn it off. SCAL can be strobed from IDLE mode
+                                   // without setting manual calibration mode(MCSM0.FS_AUTOCAL= 0)
+        const byte SRX     = 0x34; // Enable RX. Perform calibration first if coming from IDLE and MCSM0.FS_AUTOCAL=1.
+        const byte STX     = 0x35; // In IDLE state: Enable TX. Perform calibration first if MCSM0.FS_AUTOCAL=1.
+                                   // If in RX state and CCA is enabled: Only go to TX if channel is clear.
+        const byte SIDLE   = 0x36; // Exit RX / TX, turn off frequency synthesizer and exit Wake-On-Radio mode if applicable.
+        const byte SWOR    = 0x38; // Start automatic RX polling sequence (Wake-on-Radio) as described in Section 19.5 if WORCTRL.RC_PD=0.
+        const byte SPWD    = 0x39; // Enter power down mode when CSn goes high.
+        const byte SFRX    = 0x3A; // Flush the RX FIFO buffer. Only issue SFRX in IDLE or RXFIFO_OVERFLOW states
+        const byte SFTX    = 0x3B; // Flush the TX FIFO buffer. Only issue SFTX in IDLE or TXFIFO_UNDERFLOW states.
         const byte SWORRST = 0x3C; // Reset real time clock to Event1 value.
         const byte SNOP    = 0x3D; // No operation. May be used to get access to the chip status byte.
 

@@ -1,3 +1,18 @@
+// Copyright (C) 2024 Amol Deshpande
+// 
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+// 
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+// 
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 #pragma once
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
@@ -25,14 +40,14 @@ namespace TI_CC1101
     gpio_num_t mosiPin;
     gpio_num_t clockPin;
     gpio_num_t chipSelectPin;
-    gpio_num_t clockFrequencyMHz;
-    int queueSize; // number of parallel transactions 
-    
+    int        clockFrequencyHz;
+    int        queueSize; // number of parallel transactions
+
     SpiMode spiMode;
     Esp32SPIHost spiHost;
   };
 
-  class SpiDevice
+  class SpiMaster
   {
     protected:
        spi_device_handle_t m_DeviceHandle;
@@ -41,8 +56,8 @@ namespace TI_CC1101
        SpiConfig m_config;
 
      public:
-       SpiDevice();
-       ~SpiDevice();
+       SpiMaster();
+       ~SpiMaster();
        bool Init(const SpiConfig &cfg);
 
        gpio_num_t MisoPin() { return m_config.misoPin;}
@@ -50,8 +65,9 @@ namespace TI_CC1101
        gpio_num_t ClockPin() { return m_config.clockPin;}
        gpio_num_t ChipSelectPin() { return m_config.chipSelectPin;}
 
-       bool WriteByte(byte toWrite);
-       bool WriteByteToAddress(byte address, byte value);
+       byte WriteByte(byte toWrite);
+       byte WriteByteToAddress(byte address, byte value);
+       byte WriteBytes(byte* toWrite, size_t arrayLen);
 
   };
 
