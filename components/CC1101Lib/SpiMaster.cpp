@@ -12,7 +12,6 @@
 // 
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#include <esp_log.h>
 #include "CC1101Lib.h"
 #include "SpiMaster.h"
 
@@ -79,13 +78,13 @@ bool SpiMaster::Init(const SpiConfig &cfg)
 Error:
     if(!bRet)
     {
-        ESP_LOGE(TAG, "%s failed", __FUNCTION__);
+        ESP_LOGE(TAG, "%s failed", __PRETTY_FUNCTION__);
     }
     return bRet;
 }
 byte SpiMaster::WriteByte(byte toWrite)
 {
-    bool              bRet;
+    bool              bRet = true;
     byte              statusByte = 0;
     spi_transaction_t transaction = {.flags     = SPI_TRANS_USE_RXDATA,
                                      .length    = 8,
@@ -97,7 +96,7 @@ byte SpiMaster::WriteByte(byte toWrite)
 Error:
     if (!bRet)
     {
-        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __FUNCTION__,statusByte);
+        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __PRETTY_FUNCTION__,statusByte);
         statusByte = 0;
     }
     return statusByte;
@@ -118,7 +117,7 @@ byte SpiMaster::WriteByteToAddress(byte address, byte value)
 Error:
     if (!bRet)
     {
-        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __FUNCTION__,statusByte);
+        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __PRETTY_FUNCTION__,statusByte);
         statusByte = 0;
     }
     return statusByte;
@@ -126,7 +125,7 @@ Error:
 
 byte SpiMaster::WriteBytes(byte *toWrite, size_t arrayLen)
 {
-    bool              bRet;
+    bool              bRet = true;
     byte              statusByte = 0;
     spi_transaction_t transaction = {
         .flags = SPI_TRANS_USE_TXDATA,
@@ -139,7 +138,7 @@ byte SpiMaster::WriteBytes(byte *toWrite, size_t arrayLen)
 Error:
     if (!bRet)
     {
-        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __FUNCTION__,statusByte);
+        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __PRETTY_FUNCTION__,statusByte);
         statusByte = 0;
     }
     return statusByte;

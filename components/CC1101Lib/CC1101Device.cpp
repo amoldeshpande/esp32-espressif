@@ -40,6 +40,8 @@ namespace TI_CC1101
         }
         m_frequencyIncrement = m_oscillatorFrequencyHz/ kFrequencyDivisor;
 
+        ESP_LOGI(TAG, "CC1101Device::Init");
+
         Reset();
     }
 
@@ -76,7 +78,7 @@ namespace TI_CC1101
     Error:
         if(!bRet)
         {
-            //reset failed
+            ESP_LOGW(TAG, "CC1101 reset failed"); // reset failed
         }
     }
     // Page 75 of TI Datasheet
@@ -105,11 +107,14 @@ namespace TI_CC1101
         byte freq1 = (byte)((frequencySteps & 0x0000FF00) >> 8);
         byte freq2 = (byte)((frequencySteps & 0x001F0000) >> 16);
 
+        ESP_LOGD(TAG,"SetFrequency() -> freq0=0x%X, freq1=0x%X, freq2 = 0x%X", freq0, freq1, freq2);
+
         writeRegister(CC1101_CONFIG::FREQ0, freq0);
         writeRegister(CC1101_CONFIG::FREQ1, freq1);
         writeRegister(CC1101_CONFIG::FREQ2, freq2);
 
         m_oscillatorFrequencyHz = frequencyMHz * 1'000'000;
+        ESP_LOGI(TAG, "m_oscillatorFrequencyHz is now %g", m_oscillatorFrequencyHz);
     }
     // Page 76 of TI Datasheet
     //
@@ -163,6 +168,8 @@ namespace TI_CC1101
             }
         }
         byte result = (byte)(((Exponent << 2 | Mantissa) << 4) | DataRate);
+
+        ESP_LOGI(TAG, "SetReceiveChannelFilterBandwidth: setting result=0x%X, Mantissa=0x%X,Exponent=0x%X",  result, Exponent, Mantissa);
         writeRegister(CC1101_CONFIG::MDMCFG4, result);
     }
     /// <summary>
@@ -224,6 +231,7 @@ namespace TI_CC1101
             }
         }
         byte result = (byte)(Exponent << 4 | Mantissa);
+        ESP_LOGI(TAG, "SetModemDeviation: setting result=0x%X, Mantissa=0x%X,Exponent=0x%X",  result, Exponent, Mantissa);
         writeRegister(CC1101_CONFIG::DEVIATN, result);
     }
     /// <summary>

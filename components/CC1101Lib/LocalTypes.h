@@ -1,6 +1,10 @@
 #pragma once
 #include <stdint.h>
+#include <esp_log.h>
 
+#ifndef NDEBUG 
+#define _DEBUG 
+#endif
 namespace TI_CC1101
 {
     typedef uint8_t byte;
@@ -24,14 +28,14 @@ namespace TI_CC1101
 #define CERA(exp)        {\
 	if((exp) != ESP_OK) {\
 		bRet = false; \
-		assert(exp);
+		assert(exp); \
 		goto Error; \
 	}\
 }
 #define CBRA(exp)        {\
 	if(!(exp)) {\
 		bRet = false; \
-		assert(exp);
+		assert(exp); \
 		goto Error; \
 	}\
 }
