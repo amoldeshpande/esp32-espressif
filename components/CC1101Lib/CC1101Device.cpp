@@ -31,8 +31,9 @@ namespace TI_CC1101
     {
     }
 
-    void CC1101Device::Init(std::shared_ptr<SpiMaster> spiMaster,  float crystalFrequencyHz)
+    bool CC1101Device::Init(std::shared_ptr<SpiMaster> spiMaster,CC110DeviceConfig& deviceConfig,  float crystalFrequencyHz)
     {
+        bool bRet   = true;
         m_spiMaster = spiMaster;
         if(crystalFrequencyHz != 0)
         {
@@ -43,6 +44,18 @@ namespace TI_CC1101
         ESP_LOGI(TAG, "CC1101Device::Init");
 
         Reset();
+
+        delayMicroseconds(10);
+
+        byte partNumber = readRegister(CC1101_CONFIG::PARTNUM);
+        byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
+
+        CBRA((partNumber == kPartNumber) && (chipVersion == kChipVersion));
+
+        ESP_LOGI(TAG, "Part Number 0x%X and chip version 0x%X", partNumber, chipVersion);
+
+    Error:
+        return bRet;
     }
 
     void CC1101Device::Reset()
@@ -71,7 +84,7 @@ namespace TI_CC1101
 
         // This is a command strobe so we only need the lower 6 bits, i.e, the address.
         // See page 32, Section 10.4
-        CBRA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES));
+        CERA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES));
 
         waitForMisoLow();
 
@@ -528,6 +541,8 @@ namespace TI_CC1101
         lowerChipSelect();
         waitForMisoLow();
         byte value = m_spiMaster->WriteByte(address);
+        value = m_spiMaster->WriteByte(0);
+        raiseChipSelect();
 
         return value;
     }

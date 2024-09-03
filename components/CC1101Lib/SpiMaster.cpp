@@ -17,9 +17,6 @@
 
 static const char *TAG = "SpiMaster";
 
-// TODO do something better about this stupid requirement
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 namespace TI_CC1101
 {
 
@@ -50,20 +47,31 @@ bool SpiMaster::Init(const SpiConfig &cfg)
         .data6_io_num = -1,
         .data7_io_num = -1,
         .max_transfer_sz = 0,
-        .flags = 0,
+        .flags = SPICOMMON_BUSFLAG_MASTER,
         .isr_cpu_id = ESP_INTR_CPU_AFFINITY_AUTO,
         .intr_flags = 0
     };
     spi_device_interface_config_t deviceConfig = {
         .command_bits = 0,// No command bits
         .address_bits = 0,
+        .dummy_bits = 0,
         .mode = static_cast<uint8_t>(cfg.spiMode),
+        .clock_source = SPI_CLK_SRC_DEFAULT,
+        .duty_cycle_pos = 0,
+        .cs_ena_pretrans = 0,
+        .cs_ena_posttrans = 0,
         .clock_speed_hz = cfg.clockFrequencyHz,
-        .spics_io_num = cfg.chipSelectPin,
+        .input_delay_ns = 0,
+        .spics_io_num = -1,// Required because we'll be managing the CS high/low ourselves.
+        .flags = 0,
         .queue_size = cfg.queueSize,
         .pre_cb = nullptr,
         .post_cb = nullptr
     };
+
+    gpio_reset_pin(cfg.chipSelectPin);
+    gpio_set_direction(cfg.chipSelectPin, GPIO_MODE_OUTPUT);
+    gpio_set_level(cfg.chipSelectPin, 1);
 
     spi_host_device_t host_id = (cfg.spiHost == Esp32SPIHost::HSPI ? HSPI_HOST : VSPI_HOST);
     ret = spi_bus_initialize(host_id,  &busConfig,kDmaChannelToUse);
@@ -82,67 +90,65 @@ Error:
     }
     return bRet;
 }
-byte SpiMaster::WriteByte(byte toWrite)
+bool SpiMaster::WriteByte(byte toWrite)
 {
     bool              bRet = true;
-    byte              statusByte = 0;
-    spi_transaction_t transaction = {.flags     = SPI_TRANS_USE_RXDATA,
-                                     .length    = 8,
-                                     .rxlength  = 1,
-                                     .tx_buffer = &toWrite};
+    esp_err_t         retCode;
+    spi_transaction_t transaction;
 
-    CERA(spi_device_transmit(m_DeviceHandle, &transaction));
-    statusByte = transaction.rx_data[0];
+    intializeDefaultTransaction(transaction);
+    transaction.length    = 8;
+    transaction.tx_buffer = &toWrite;
+
+    retCode = spi_device_transmit(m_DeviceHandle, &transaction);
+    CERA(retCode);
 Error:
     if (!bRet)
     {
-        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __PRETTY_FUNCTION__,statusByte);
-        statusByte = 0;
+        ESP_LOGE(TAG, "%s failed, spi_device_transmit returned -> 0x%X", __PRETTY_FUNCTION__,retCode);
     }
-    return statusByte;
+    return bRet;
 }
 
-byte SpiMaster::WriteByteToAddress(byte address, byte value)
+bool SpiMaster::WriteByteToAddress(byte address, byte value)
 {
     bool              bRet;
-    byte              statusByte = 0;
-    spi_transaction_t transaction = {
-        .flags = SPI_TRANS_USE_TXDATA,
-        .length = 16,
-        .rxlength = 1,
-        .tx_data = {address, value, 0, 0}
-    };
-    CERA(spi_device_transmit(m_DeviceHandle,&transaction));
-    statusByte = transaction.rx_data[0];
+    esp_err_t         retCode;
+    spi_transaction_t transaction;
+
+    intializeDefaultTransaction(transaction);
+    transaction.flags      = SPI_TRANS_USE_TXDATA;
+    transaction.length  = 16;
+    transaction.tx_data[0] = address;
+    transaction.tx_data[1] = value;
+    retCode = spi_device_transmit(m_DeviceHandle, &transaction);
+    CERA(retCode);
 Error:
     if (!bRet)
     {
-        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __PRETTY_FUNCTION__,statusByte);
-        statusByte = 0;
+        ESP_LOGE(TAG, "%s failed, spi_device_transmit returned ->  0x%X", __PRETTY_FUNCTION__,retCode);
     }
-    return statusByte;
+    return bRet;
 }
 
-byte SpiMaster::WriteBytes(byte *toWrite, size_t arrayLen)
+bool SpiMaster::WriteBytes(byte *toWrite, size_t arrayLen)
 {
     bool              bRet = true;
-    byte              statusByte = 0;
-    spi_transaction_t transaction = {
-        .flags = SPI_TRANS_USE_TXDATA,
-        .length = arrayLen*8,
-        .rxlength = 1,
-        .tx_buffer = toWrite
-    };
-    CERA(spi_device_transmit(m_DeviceHandle,&transaction));
-    statusByte = transaction.rx_data[0];
+    esp_err_t         retCode;
+    spi_transaction_t transaction;
+
+    intializeDefaultTransaction(transaction);
+    transaction.flags   =    SPI_TRANS_USE_TXDATA ;
+    transaction.length = arrayLen * 8;
+    transaction.tx_buffer = toWrite;
+    retCode = spi_device_transmit(m_DeviceHandle, &transaction);
+    CERA(retCode);
 Error:
     if (!bRet)
     {
-        ESP_LOGE(TAG, "%s failed, statusByte = 0x%X", __PRETTY_FUNCTION__,statusByte);
-        statusByte = 0;
+        ESP_LOGE(TAG, "%s failed, spi_device_transmit returned -> 0x%X", __PRETTY_FUNCTION__,retCode);
     }
-    return statusByte;
+    return bRet;
 }
 
 }//namespace
-#pragma GCC diagnostic pop

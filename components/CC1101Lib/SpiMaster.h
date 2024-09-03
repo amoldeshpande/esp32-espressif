@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #pragma once
+#include <memory.h>
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
 #include "LocalTypes.h"
@@ -50,25 +51,27 @@ namespace TI_CC1101
   class SpiMaster
   {
     protected:
-       spi_device_handle_t m_DeviceHandle;
+      spi_device_handle_t m_DeviceHandle;
 
-       const int kDmaChannelToUse = 0; //no DMA (for now ?)
-       SpiConfig m_config;
+      const int kDmaChannelToUse = 0; // no DMA (for now ?)
+      SpiConfig m_config;
 
-     public:
-       SpiMaster();
-       ~SpiMaster();
-       bool Init(const SpiConfig &cfg);
+    public:
+      SpiMaster();
+      ~SpiMaster();
+      bool Init(const SpiConfig &cfg);
 
-       gpio_num_t MisoPin() { return m_config.misoPin;}
-       gpio_num_t MosiPin() { return m_config.mosiPin;}
-       gpio_num_t ClockPin() { return m_config.clockPin;}
-       gpio_num_t ChipSelectPin() { return m_config.chipSelectPin;}
+      gpio_num_t MisoPin() { return m_config.misoPin; }
+      gpio_num_t MosiPin() { return m_config.mosiPin; }
+      gpio_num_t ClockPin() { return m_config.clockPin; }
+      gpio_num_t ChipSelectPin() { return m_config.chipSelectPin; }
 
-       byte WriteByte(byte toWrite);
-       byte WriteByteToAddress(byte address, byte value);
-       byte WriteBytes(byte* toWrite, size_t arrayLen);
+      bool WriteByte(byte toWrite);
+      bool WriteByteToAddress(byte address, byte value);
+      bool WriteBytes(byte *toWrite, size_t arrayLen);
 
+    protected:
+      inline void intializeDefaultTransaction(spi_transaction_t &transToInitialize) { memset(&transToInitialize, 0, sizeof(transToInitialize)); }
   };
 
 }//namespace

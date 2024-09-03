@@ -38,9 +38,25 @@ extern "C" void app_main(void)
         .spiMode = SpiMode::ModeZero,
         .spiHost = Esp32SPIHost::VSPI
     };
+    CC110DeviceConfig somfyRadioConfig = {
+        .TxPin = GPIO_NUM_13,
+        .RxPin = GPIO_NUM_12,
+        .OscilllatorFrequencyMHz = 433.92,
+        .ReceiveBandwidthKHz = 812.5,
+        .FrequencyDeviationKhz = 47.6,
+        .TxPower = -30,
+        .Modulation = ModulationType::ASK_OOK,
+        .ManchesterEnabled = true,
+        .PacketFmt = PacketFormat::Synchronous, // Recommended "new" way in datasheet
+        .DisableDCFilter = false,
+        .EnableCRC = false,
+        .EnableCRCAutoflush = false,
+        .SyncMode = SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold,
+        .AddressCheck = AddressCheckConfiguration::None
+    };
     ESP_LOGI(TAG, "Initializing SPI");
     spiMaster->Init(spiConfig);
 
     ESP_LOGI(TAG, "Initializing CC1101");
-    cc1101Device.Init(spiMaster);
+    cc1101Device.Init(spiMaster,somfyRadioConfig);
 }

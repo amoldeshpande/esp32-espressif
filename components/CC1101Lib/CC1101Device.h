@@ -14,6 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma once
 #include <driver/spi_master.h>
+#include <driver/gpio.h>
 #include <vector>
 #include <memory>
 #include "CC1101Lib.h"
@@ -24,8 +25,20 @@ namespace TI_CC1101
     
     struct CC110DeviceConfig
     {
-        byte TxPin;
-        byte RxPin;
+        gpio_num_t                TxPin;
+        gpio_num_t                RxPin;
+        float                     OscilllatorFrequencyMHz;
+        float                     ReceiveBandwidthKHz;
+        float                     FrequencyDeviationKhz;
+        int                       TxPower;
+        ModulationType            Modulation;
+        bool                      ManchesterEnabled;
+        PacketFormat              PacketFmt;
+        bool                      DisableDCFilter;
+        bool                      EnableCRC;
+        bool                      EnableCRCAutoflush;
+        SyncWordQualifierMode     SyncMode;
+        AddressCheckConfiguration AddressCheck;
     };
     class CC1101Device final
     {
@@ -48,10 +61,14 @@ namespace TI_CC1101
         const byte kSpiNoBurstAccessMask   = 0b10111111; // No. 2 MSB is burst bit
         const byte kSpiBurstAccessBit      = 0b01000000; // OR this to set burst bit on
 
+        //Pg 92 of datasheet
+        const byte kPartNumber = 0x0;
+        const byte kChipVersion = 0x14;
+
       public:
         CC1101Device();
         ~CC1101Device();
-        void Init(std::shared_ptr<SpiMaster> spiMaster, float crystalFrequencyHz = -1);
+        bool Init(std::shared_ptr<SpiMaster> spiMaster,CC110DeviceConfig& deviceConfig, float crystalFrequencyHz = -1);
         void Reset();
         void SetFrequency(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
