@@ -31,13 +31,15 @@ namespace TI_CC1101
     {
     }
 
-    bool CC1101Device::Init(std::shared_ptr<SpiMaster> spiMaster,CC110DeviceConfig& deviceConfig,  float crystalFrequencyHz)
+    bool CC1101Device::Init(std::shared_ptr<SpiMaster> spiMaster, CC110DeviceConfig &deviceConfig)
     {
         bool bRet   = true;
         m_spiMaster = spiMaster;
-        if(crystalFrequencyHz != 0)
+        m_deviceConfig = deviceConfig;
+
+        if(m_deviceConfig.OscilllatorFrequencyMHz != 0)
         {
-            m_oscillatorFrequencyHz = crystalFrequencyHz;
+            m_oscillatorFrequencyHz = m_deviceConfig.OscilllatorFrequencyMHz*1'000'000;
         }
         m_frequencyIncrement = m_oscillatorFrequencyHz/ kFrequencyDivisor;
 
@@ -51,6 +53,7 @@ namespace TI_CC1101
         byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
 
         CBRA((partNumber == kPartNumber) && (chipVersion == kChipVersion));
+
 
         ESP_LOGI(TAG, "Part Number 0x%X and chip version 0x%X", partNumber, chipVersion);
 
@@ -87,6 +90,10 @@ namespace TI_CC1101
         CERA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES));
 
         waitForMisoLow();
+
+        CBRA(raiseChipSelect());
+
+        setDefaultRegisters();
 
     Error:
         if(!bRet)
@@ -264,13 +271,13 @@ namespace TI_CC1101
         {
             currentTable   = &ConfigValues::PATABLE_315_SETTINGS[0];
             paSetting      = setMultiLayerInductorPower(outputPower, currentTable,ARRAYSIZE(ConfigValues::PATABLE_315_SETTINGS));
-            m_currentPATable = ConfigValues::PATables::PA_315;
+            m_currentPATable = PATables::PA_315;
         }
         else if (frequencyMHz <= 464)
         {
             currentTable   = ConfigValues::PATABLE_433_SETTINGS;
             paSetting      = setMultiLayerInductorPower(outputPower, currentTable,ARRAYSIZE(ConfigValues::PATABLE_433_SETTINGS));
-            m_currentPATable = ConfigValues::PATables::PA_433;
+            m_currentPATable = PATables::PA_433;
         }
         // I'm not sure what to do about 868, so this is all a bit adhoc over 464 MHz. I suppose it depends on your
         // chip.
@@ -278,13 +285,13 @@ namespace TI_CC1101
         {
             currentTable   = ConfigValues::PATABLE_868_SETTINGS;
             paSetting      = setWireWoundInductorPower(outputPower, currentTable,ARRAYSIZE(ConfigValues::PATABLE_868_SETTINGS));
-            m_currentPATable = ConfigValues::PATables::PA_868;
+            m_currentPATable = PATables::PA_868;
         }
         else
         {
             currentTable   = ConfigValues::PATABLE_915_SETTINGS;
             paSetting      = setWireWoundInductorPower(outputPower, currentTable,ARRAYSIZE(ConfigValues::PATABLE_915_SETTINGS));
-            m_currentPATable = ConfigValues::PATables::PA_915;
+            m_currentPATable = PATables::PA_915;
         }
 
         // ASK always uses index 0 PATABLE to transmit a 0;
@@ -649,6 +656,10 @@ namespace TI_CC1101
             paSetting = currentTable[9];
         }
         return paSetting;
+    }
+
+    void CC1101Device::setDefaultRegisters()
+    {
     }
 
 } // namespace TI_CC1101

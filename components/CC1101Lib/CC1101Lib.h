@@ -182,23 +182,6 @@ namespace TI_CC1101
           CLK_XOSC_BY_192                               = 0x3F,//CLK_XOSC/192
       };
 
-      // values in bits 4 and 5 of PKTCTRL0 register (Page 74)
-      enum class PKTCTRL0_PKT_FORMAT : byte // Format of RX and TX data
-      {
-          Normal                = 0,//Normal mode, use FIFOs for RX and TX
-          SynchronousSerialMode = 1,//Synchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
-          RandomTxMode          = 2,// Random TX mode; sends random data using PN9 generator. Used for test.  Works as normal mode, setting 0 (00), in RX
-          AsyncSerialMode       = 3,//Asynchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
-      };
-      // values in bits 0 and 1 of PKTCTRL0 register (Page 74)
-      enum class PKTCTRL0_LENGTH_CONFIG : byte //Packet length configuration
-      {
-          Fixed    = 0,//Fixed packet length mode. Length configured in PKTLEN register
-          Variable = 1,//Variable packet length mode. Packet length configured by the first byte after sync word
-          Infinite = 2,//Infinite packet length mode
-          Reserved = 3,//Reserved
-      };
-
       // Once again, we're bitten by nanoFramework's lack of Dictionary
       // Below correspond to power levels of -30,-20,-15,-10,0,5,7,10
       // Multi-layer inductors are used in the OEM reference design for 315 and 433 MHz
@@ -209,8 +192,31 @@ namespace TI_CC1101
       const byte PATABLE_868_SETTINGS[] = { 0x03, 0x17, 0x1D, 0x26, 0x37, 0x50, 0x86, 0xCD, 0xC5, 0xC0 };
       const byte PATABLE_915_SETTINGS[] = { 0x03, 0x0E, 0x1E, 0x27, 0x38, 0x8E, 0x84, 0xCC, 0xC3, 0xC0 };
 
-      enum class PATables { PA_315, PA_433, PA_868, PA_915 };
   }
+
+  // values in bits 4 and 5 of PKTCTRL0 register (Page 74)
+  enum class PKTCTRL0_PKT_FORMAT : byte // Format of RX and TX data
+  {
+      Normal                = 0, // Normal mode, use FIFOs for RX and TX
+      SynchronousSerialMode = 1, // Synchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
+      RandomTxMode          = 2, // Random TX mode; sends random data using PN9 generator. Used for test.  Works as normal mode, setting 0 (00), in RX
+      AsyncSerialMode       = 3, // Asynchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
+  };
+  // values in bits 0 and 1 of PKTCTRL0 register (Page 74)
+  enum class PKTCTRL0_LENGTH_CONFIG : byte // Packet length configuration
+  {
+      Fixed    = 0, // Fixed packet length mode. Length configured in PKTLEN register
+      Variable = 1, // Variable packet length mode. Packet length configured by the first byte after sync word
+      Infinite = 2, // Infinite packet length mode
+      Reserved = 3, // Reserved
+  };
+  enum class PATables
+  {
+      PA_315,
+      PA_433,
+      PA_868,
+      PA_915
+  };
 
   enum class ModulationType
   {
@@ -228,7 +234,7 @@ namespace TI_CC1101
       Normal       = 0, // Normal mode, use FIFOs for RX and TX
       Synchronous  = 1, // Synchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
       RandomTX     = 2, // Random TX mode; sends random data using PN9 generator. Used for test.  Works as normal mode,
-                    // setting 0 (00), in RX
+                        // setting 0 (00), in RX
       Asynchronous = 3, // Asynchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
   };
   enum class SyncWordQualifierMode

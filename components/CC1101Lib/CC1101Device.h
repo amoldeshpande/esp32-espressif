@@ -39,6 +39,7 @@ namespace TI_CC1101
         bool                      EnableCRCAutoflush;
         SyncWordQualifierMode     SyncMode;
         AddressCheckConfiguration AddressCheck;
+        PKTCTRL0_PKT_FORMAT       RxTxDataFormat;
     };
     class CC1101Device final
     {
@@ -49,12 +50,13 @@ namespace TI_CC1101
         float                      m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMhz * (1'000'000);
         // see SetFrequency() below
         float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMhz / kFrequencyDivisor;
-        ConfigValues::PATables     m_currentPATable               = ConfigValues::PATables::PA_433;
+        PATables                   m_currentPATable               = PATables::PA_433;
         ModulationType             m_currentModulationType        = ModulationType::FSK_2;
         bool                       m_currentManchesterEnabled     = false;
         // PATABLE is 8 bytes
         byte                       m_PATABLE[8]                   = {0, 0, 0, 0, 0, 0, 0, 0};
         std::shared_ptr<SpiMaster> m_spiMaster;
+        CC110DeviceConfig          m_deviceConfig;
 
         const byte kSpiHeaderByteWriteMask = 0b01111111; // Mask out high bit.
         const byte kSpiHeaderReadBit       = 0b10000000; // OR this in to set read bit in the header
@@ -68,7 +70,7 @@ namespace TI_CC1101
       public:
         CC1101Device();
         ~CC1101Device();
-        bool Init(std::shared_ptr<SpiMaster> spiMaster,CC110DeviceConfig& deviceConfig, float crystalFrequencyHz = -1);
+        bool Init(std::shared_ptr<SpiMaster> spiMaster, CC110DeviceConfig &deviceConfig);
         void Reset();
         void SetFrequency(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
@@ -95,5 +97,6 @@ namespace TI_CC1101
         void writeBurstRegister(byte address, byte *values, int valueLen);
         byte setMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         byte setWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
+        void setDefaultRegisters();
     };
 } // namespace TI_CC1101
