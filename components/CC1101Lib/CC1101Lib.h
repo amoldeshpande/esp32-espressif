@@ -182,7 +182,6 @@ namespace TI_CC1101
           CLK_XOSC_BY_192                               = 0x3F,//CLK_XOSC/192
       };
 
-      // Once again, we're bitten by nanoFramework's lack of Dictionary
       // Below correspond to power levels of -30,-20,-15,-10,0,5,7,10
       // Multi-layer inductors are used in the OEM reference design for 315 and 433 MHz
       const byte PATABLE_315_SETTINGS[] = { 0x12, 0x0D, 0x1C, 0x34, 0x51, 0x85, 0xCB, 0xC2 };
@@ -195,7 +194,7 @@ namespace TI_CC1101
   }
 
   // values in bits 4 and 5 of PKTCTRL0 register (Page 74)
-  enum class PKTCTRL0_PKT_FORMAT : byte // Format of RX and TX data
+  enum class PacketFormat : byte // Format of RX and TX data
   {
       Normal                = 0, // Normal mode, use FIFOs for RX and TX
       SynchronousSerialMode = 1, // Synchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
@@ -203,7 +202,7 @@ namespace TI_CC1101
       AsyncSerialMode       = 3, // Asynchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
   };
   // values in bits 0 and 1 of PKTCTRL0 register (Page 74)
-  enum class PKTCTRL0_LENGTH_CONFIG : byte // Packet length configuration
+  enum class PacketLengthConfig : byte // Packet length configuration
   {
       Fixed    = 0, // Fixed packet length mode. Length configured in PKTLEN register
       Variable = 1, // Variable packet length mode. Packet length configured by the first byte after sync word
@@ -228,14 +227,6 @@ namespace TI_CC1101
       INVALID_5 = 5,
       INVALID_6 = 6,
       MSK       = 7
-  };
-  enum class PacketFormat
-  {
-      Normal       = 0, // Normal mode, use FIFOs for RX and TX
-      Synchronous  = 1, // Synchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
-      RandomTX     = 2, // Random TX mode; sends random data using PN9 generator. Used for test.  Works as normal mode,
-                        // setting 0 (00), in RX
-      Asynchronous = 3, // Asynchronous serial mode, Data in on GDO0 and data out on either of the GDOx pins
   };
   enum class SyncWordQualifierMode
   {

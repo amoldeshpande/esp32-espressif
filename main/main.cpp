@@ -42,18 +42,21 @@ extern "C" void app_main(void)
         .TxPin = GPIO_NUM_13,
         .RxPin = GPIO_NUM_12,
         .OscilllatorFrequencyMHz = 433.92,
-        .ReceiveBandwidthKHz = 812.5,
+        .ReceiveFilterBandwidthKHz = 812.5,
         .FrequencyDeviationKhz = 47.6,
         .TxPower = -30,
         .Modulation = ModulationType::ASK_OOK,
         .ManchesterEnabled = true,
-        .PacketFmt = PacketFormat::Synchronous, // Recommended "new" way in datasheet
-        .DisableDCFilter = false,
+        .PacketFmt = PacketFormat::Normal, 
+        .PacketLengthCfg = PacketLengthConfig::Variable,
+        .DisableDCFilter = true,
         .EnableCRC = false,
         .EnableCRCAutoflush = false,
         .SyncMode = SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold,
         .AddressCheck = AddressCheckConfiguration::None
     };
+
+    esp_log_level_set("*", ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Initializing SPI");
     spiMaster->Init(spiConfig);
 

@@ -66,9 +66,9 @@ namespace TI_CC1101
       gpio_num_t ClockPin() { return m_config.clockPin; }
       gpio_num_t ChipSelectPin() { return m_config.chipSelectPin; }
 
-      bool WriteByte(byte toWrite);
-      bool WriteByteToAddress(byte address, byte value);
-      bool WriteBytes(byte *toWrite, size_t arrayLen);
+      bool WriteByte(byte toWrite,byte& outData);
+      bool WriteByteToAddress(byte address, byte value, byte&  outData);
+      bool WriteBytes(byte *toWrite, size_t arrayLen, byte&  outData);
 
     protected:
       inline void intializeDefaultTransaction(spi_transaction_t &transToInitialize) { memset(&transToInitialize, 0, sizeof(transToInitialize)); }

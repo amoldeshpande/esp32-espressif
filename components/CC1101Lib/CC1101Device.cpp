@@ -52,10 +52,10 @@ namespace TI_CC1101
         byte partNumber = readRegister(CC1101_CONFIG::PARTNUM);
         byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
 
+        ESP_LOGI(TAG, "Part Number 0x%X and chip version 0x%X", partNumber, chipVersion);
         CBRA((partNumber == kPartNumber) && (chipVersion == kChipVersion));
 
 
-        ESP_LOGI(TAG, "Part Number 0x%X and chip version 0x%X", partNumber, chipVersion);
 
     Error:
         return bRet;
@@ -73,6 +73,7 @@ namespace TI_CC1101
             * When SO goes low again, reset is complete and the chip is in the IDLE state.
         */
         bool bRet = true;
+        byte statusCode = 0;
 
         CERA(gpio_set_level(m_spiMaster->ClockPin(),1));
         CERA(gpio_set_level(m_spiMaster->MosiPin(),0));
@@ -82,18 +83,20 @@ namespace TI_CC1101
         CBRA(raiseChipSelect());
         delayMicroseconds(5);
         CBRA(lowerChipSelect());
-        delayMicroseconds(40);
+        delayMicroseconds(45);
         CBRA(raiseChipSelect());
-
-        // This is a command strobe so we only need the lower 6 bits, i.e, the address.
-        // See page 32, Section 10.4
-        CERA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES));
 
         waitForMisoLow();
 
-        CBRA(raiseChipSelect());
+        // This is a command strobe so we only need the lower 6 bits, i.e, the address.
+        // See page 32, Section 10.4
+        CBRA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES,statusCode));
 
-        setDefaultRegisters();
+        waitForMisoLow();
+
+        CBRA(lowerChipSelect());
+
+        configure();
 
     Error:
         if(!bRet)
@@ -111,7 +114,7 @@ namespace TI_CC1101
     //
     // In the default case 26 MHz / 65536 = 396.728 Hz  is the multiplier, stored as frequencyIncrement variable
     //
-    void CC1101Device::SetFrequency(float frequencyMHz)
+    void CC1101Device::SetFrequencyMHz(float frequencyMHz)
     {
         if (frequencyMHz < 300)
         {
@@ -397,13 +400,13 @@ namespace TI_CC1101
         {
             case PacketFormat::Normal:
                 break;
-            case PacketFormat::Synchronous:
+            case PacketFormat::SynchronousSerialMode:
                 result |= 0b00010000;
                 break;
-            case PacketFormat::RandomTX:
+            case PacketFormat::RandomTxMode:
                 result |= 0b00100000;
                 break;
-            case PacketFormat::Asynchronous:
+            case PacketFormat::AsyncSerialMode:
                 result |= 0b00110000;
                 break;
         }
@@ -477,13 +480,13 @@ namespace TI_CC1101
     void CC1101Device::SetSyncMode(SyncWordQualifierMode syncMode)
     {
         byte currentMdmcfg2 = readRegister(CC1101_CONFIG::MDMCFG2);
-        int  currentSetting = currentMdmcfg2 & 0b00000011;
+        int  currentSetting = currentMdmcfg2 & 0b00000111;
 
         if ((int)syncMode == currentSetting)
         {
             return;
         }
-        byte result = (byte)((currentMdmcfg2 & 0b11111100) | (int)syncMode);
+        byte result = (byte)((currentMdmcfg2 & 0b11111000) | (int)syncMode);
 
         writeRegister(CC1101_CONFIG::MDMCFG2, result);
     }
@@ -538,8 +541,10 @@ namespace TI_CC1101
 
     byte CC1101Device::readRegister(byte address)
     {
-        address &= 0b00111111; //clear R/W and burst bit
-        if(address >= CC1101_CONFIG::PARTNUM && address <= CC1101_CONFIG::RCCTRL0_STATUS)
+        bool bRet  = true;
+        byte value = 0;
+        address &= 0b00111111; // clear R/W and burst bit
+        if (address >= CC1101_CONFIG::PARTNUM && address <= CC1101_CONFIG::RCCTRL0_STATUS)
         {
             address |= kSpiBurstAccessBit;
         }
@@ -547,27 +552,34 @@ namespace TI_CC1101
 
         lowerChipSelect();
         waitForMisoLow();
-        byte value = m_spiMaster->WriteByte(address);
-        value = m_spiMaster->WriteByte(0);
+        CBRA(m_spiMaster->WriteByte(address, value));
+        CBRA(m_spiMaster->WriteByte(0,value));
         raiseChipSelect();
 
+    Error:
+        if (!bRet)
+        {
+            ESP_LOGE(TAG, "%s failed", __PRETTY_FUNCTION__);
+        }
         return value;
     }
 
     void CC1101Device::writeRegister(byte address, byte value)
     {
+        byte statusCode;
         lowerChipSelect();
         waitForMisoLow();
-        m_spiMaster->WriteByteToAddress(address,value);
+        m_spiMaster->WriteByteToAddress(address,value,statusCode);
         raiseChipSelect();
     }
 
     void CC1101Device::writeBurstRegister(byte address, byte *values, int valueLen)
     {
+        byte statusCode = 0;
         lowerChipSelect();
         waitForMisoLow();
-        m_spiMaster->WriteByte(address | kSpiBurstAccessBit);
-        m_spiMaster->WriteBytes(values,valueLen);
+        m_spiMaster->WriteByte(address | kSpiBurstAccessBit,statusCode);
+        m_spiMaster->WriteBytes(values,valueLen,statusCode);
         raiseChipSelect();
     }
 
@@ -658,8 +670,56 @@ namespace TI_CC1101
         return paSetting;
     }
 
-    void CC1101Device::setDefaultRegisters()
+    void CC1101Device::configure()
     {
+        bool bRet       = true;
+        byte pktctrlVal =   (byte)( ((int)m_deviceConfig.PacketFmt << 4 | (int)m_deviceConfig.PacketLengthCfg ) );
+
+        // Should be GDO0, GDO2 on the esp
+        CERA(gpio_set_direction(m_deviceConfig.TxPin, GPIO_MODE_OUTPUT));
+        CERA(gpio_set_direction(m_deviceConfig.RxPin, GPIO_MODE_INPUT));
+
+        SetFrequencyMHz(m_deviceConfig.OscilllatorFrequencyMHz);
+        SetReceiveChannelFilterBandwidth(m_deviceConfig.ReceiveFilterBandwidthKHz);
+        SetModemDeviation(m_deviceConfig.FrequencyDeviationKhz);
+        SetOutputPower(m_deviceConfig.TxPower);
+        // Set MDMCFG2
+        SetModulation(m_deviceConfig.Modulation);
+        SetManchesterEncoding(m_deviceConfig.ManchesterEnabled);
+
+        // TODO figure out why these
+        writeRegister(CC1101_CONFIG::IOCFG0, (byte)ConfigValues::GDx_CFG_LowerSixBits::SYNC_WORD_OR_RX_PKT_DISCARDED_OR_TX_UNDERFLOW);
+        writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::SERIAL_CLOCK);
+
+
+        // Set PKTCTRL0
+        switch(m_deviceConfig.PacketFmt )
+        {
+            case PacketFormat::Normal:
+                writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
+                break;
+            case PacketFormat::AsyncSerialMode:
+                writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
+                break;
+            default:
+                ESP_LOGW(TAG, "Unhandled Rx/Tx Packet format");
+                break;
+        }
+
+        if(m_deviceConfig.DisableDCFilter)
+        {
+            DisableDigitalDCFilter();
+        }
+        SetCRC(m_deviceConfig.EnableCRC);
+        SetCRCAutoFlush(m_deviceConfig.EnableCRCAutoflush);
+        SetSyncMode(m_deviceConfig.SyncMode);
+        SetAddressCheck(m_deviceConfig.AddressCheck);
+
+    Error:
+        if(!bRet)
+        {
+            ESP_LOGW(TAG, "%s failed", __PRETTY_FUNCTION__);
+        }
     }
 
 } // namespace TI_CC1101

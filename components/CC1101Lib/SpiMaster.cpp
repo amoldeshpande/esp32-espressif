@@ -90,7 +90,7 @@ Error:
     }
     return bRet;
 }
-bool SpiMaster::WriteByte(byte toWrite)
+bool SpiMaster::WriteByte(byte toWrite, byte& outData)
 {
     bool              bRet = true;
     esp_err_t         retCode;
@@ -99,9 +99,11 @@ bool SpiMaster::WriteByte(byte toWrite)
     intializeDefaultTransaction(transaction);
     transaction.length    = 8;
     transaction.tx_buffer = &toWrite;
+    transaction.rx_buffer = &outData;
 
     retCode = spi_device_transmit(m_DeviceHandle, &transaction);
     CERA(retCode);
+
 Error:
     if (!bRet)
     {
@@ -110,9 +112,9 @@ Error:
     return bRet;
 }
 
-bool SpiMaster::WriteByteToAddress(byte address, byte value)
+bool SpiMaster::WriteByteToAddress(byte address, byte value, byte&  outData)
 {
-    bool              bRet;
+    bool              bRet = true;
     esp_err_t         retCode;
     spi_transaction_t transaction;
 
@@ -121,6 +123,7 @@ bool SpiMaster::WriteByteToAddress(byte address, byte value)
     transaction.length  = 16;
     transaction.tx_data[0] = address;
     transaction.tx_data[1] = value;
+    transaction.rx_buffer = &outData;
     retCode = spi_device_transmit(m_DeviceHandle, &transaction);
     CERA(retCode);
 Error:
@@ -131,16 +134,16 @@ Error:
     return bRet;
 }
 
-bool SpiMaster::WriteBytes(byte *toWrite, size_t arrayLen)
+bool SpiMaster::WriteBytes(byte *toWrite, size_t arrayLen, byte& outData)
 {
     bool              bRet = true;
     esp_err_t         retCode;
     spi_transaction_t transaction;
 
     intializeDefaultTransaction(transaction);
-    transaction.flags   =    SPI_TRANS_USE_TXDATA ;
-    transaction.length = arrayLen * 8;
+    transaction.length    = arrayLen * 8;
     transaction.tx_buffer = toWrite;
+    transaction.rx_buffer = &outData;
     retCode = spi_device_transmit(m_DeviceHandle, &transaction);
     CERA(retCode);
 Error:

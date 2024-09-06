@@ -28,28 +28,28 @@ namespace TI_CC1101
         gpio_num_t                TxPin;
         gpio_num_t                RxPin;
         float                     OscilllatorFrequencyMHz;
-        float                     ReceiveBandwidthKHz;
+        float                     ReceiveFilterBandwidthKHz;
         float                     FrequencyDeviationKhz;
-        int                       TxPower;
+        int                       TxPower; // Also called Output Power in the datasheet
         ModulationType            Modulation;
         bool                      ManchesterEnabled;
         PacketFormat              PacketFmt;
+        PacketLengthConfig        PacketLengthCfg;
         bool                      DisableDCFilter;
         bool                      EnableCRC;
         bool                      EnableCRCAutoflush;
         SyncWordQualifierMode     SyncMode;
         AddressCheckConfiguration AddressCheck;
-        PKTCTRL0_PKT_FORMAT       RxTxDataFormat;
     };
     class CC1101Device final
     {
       protected:
         // 26 MHz crystal by default. Apparently it can be 27 as well according to docs.
-        const float                kDefaultOscillatorFrequencyMhz = 26;
+        const float                kDefaultOscillatorFrequencyMHz = 26;
         const float                kFrequencyDivisor              = 2 << 16;
-        float                      m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMhz * (1'000'000);
-        // see SetFrequency() below
-        float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMhz / kFrequencyDivisor;
+        float                      m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMHz * (1'000'000);
+        // see SetFrequency() 
+        float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMHz / kFrequencyDivisor;
         PATables                   m_currentPATable               = PATables::PA_433;
         ModulationType             m_currentModulationType        = ModulationType::FSK_2;
         bool                       m_currentManchesterEnabled     = false;
@@ -72,7 +72,7 @@ namespace TI_CC1101
         ~CC1101Device();
         bool Init(std::shared_ptr<SpiMaster> spiMaster, CC110DeviceConfig &deviceConfig);
         void Reset();
-        void SetFrequency(float frequencyMHz);
+        void SetFrequencyMHz(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
         void SetModemDeviation(float deviationKHz);
         void SetOutputPower(int outputPower);
@@ -97,6 +97,6 @@ namespace TI_CC1101
         void writeBurstRegister(byte address, byte *values, int valueLen);
         byte setMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         byte setWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
-        void setDefaultRegisters();
+        void configure();
     };
 } // namespace TI_CC1101
