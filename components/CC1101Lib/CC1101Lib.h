@@ -246,4 +246,16 @@ namespace TI_CC1101
       AddressCheck_ZeroBroadcast        = 2, // Address check and 0 (0x00) broadcast
       AdressCheck_Zero_And_FF_BroadCast = 3  // Address check and 0 (0x00) and 255 (0xFF) broadcast
   };
+
+  enum class StatusByteStateMachineMode
+  {
+    IDLE = 0,
+    ReceiveMode = 1,
+    TransmitMode = 2,
+    FastTXReady = 3,
+    Calibrate = 4,
+    Settling = 5, //PLL is settling,
+    FIFOOverflowRX = 6,
+    FIFOOverflowTX = 7
+  };
 } // namespace TI_CC1101

@@ -16,3 +16,7 @@ AlignConsecutiveDeclarations:
     Enabled: true
     AcrossEmptyLines:true
     AcrossComments: true
+
+
+BraceWrapping:
+    AfterCaseLabel: true

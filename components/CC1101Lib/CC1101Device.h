@@ -99,13 +99,17 @@ namespace TI_CC1101
         bool digitalWrite(int pin, uint32_t value);
         void delayMilliseconds(int millis);
         void delayMicroseconds(int micros);
-        byte readRegister(byte address);
-        void writeRegister(byte address, byte value);
+        [[nodiscard]] byte readRegister(byte address);
+        bool readBurstRegister(byte address, byte *buffer, int len);
+        [[nodiscard]] byte writeRegister(byte address, byte value);
         void writeBurstRegister(byte address, byte *values, int valueLen);
         byte sendStrobe(byte strobeCmd);
         byte setMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         byte setWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         void configure();
+
+        void handleCommonStatusCodes(byte status);
+        void readRXFIFO(byte* buffer, int expectedCount);
 
         static void gpioISR(void *);
     };

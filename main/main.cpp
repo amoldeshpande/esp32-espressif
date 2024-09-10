@@ -40,7 +40,7 @@ extern "C" void app_main(void)
     };
     CC110DeviceConfig somfyRadioConfig = {
         .TxPin = GPIO_NUM_13,
-        .RxPin = GPIO_NUM_12,
+        .RxPin = GPIO_NUM_14,
         .OscillatorFrequencyMHz = 26,
         .CarrierFrequencyMHz = 433.92,
         .ReceiveFilterBandwidthKHz = 812.5,
@@ -48,8 +48,8 @@ extern "C" void app_main(void)
         .TxPower = -30,
         .Modulation = ModulationType::ASK_OOK,
         .ManchesterEnabled = true,
-        .PacketFmt = PacketFormat::Normal, 
-        .PacketLengthCfg = PacketLengthConfig::Variable,
+        .PacketFmt = PacketFormat::AsyncSerialMode, 
+        .PacketLengthCfg = PacketLengthConfig::Infinite,
         .DisableDCFilter = true,
         .EnableCRC = false,
         .EnableCRCAutoflush = false,
