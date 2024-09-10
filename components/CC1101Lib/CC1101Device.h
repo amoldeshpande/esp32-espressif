@@ -27,7 +27,8 @@ namespace TI_CC1101
     {
         gpio_num_t                TxPin;
         gpio_num_t                RxPin;
-        float                     OscilllatorFrequencyMHz;
+        float                     OscillatorFrequencyMHz;
+        float                     CarrierFrequencyMHz;
         float                     ReceiveFilterBandwidthKHz;
         float                     FrequencyDeviationKhz;
         int                       TxPower; // Also called Output Power in the datasheet
@@ -50,6 +51,7 @@ namespace TI_CC1101
         float                      m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMHz * (1'000'000);
         // see SetFrequency() 
         float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMHz / kFrequencyDivisor;
+        float                      m_carrierFrequencyMHz          = 433;
         PATables                   m_currentPATable               = PATables::PA_433;
         ModulationType             m_currentModulationType        = ModulationType::FSK_2;
         bool                       m_currentManchesterEnabled     = false;
@@ -67,11 +69,16 @@ namespace TI_CC1101
         const byte kPartNumber = 0x0;
         const byte kChipVersion = 0x14;
 
+        // State variables
+        bool m_dataReceived = false;
+
       public:
         CC1101Device();
         ~CC1101Device();
         bool Init(std::shared_ptr<SpiMaster> spiMaster, CC110DeviceConfig &deviceConfig);
         void Reset();
+        bool BeginReceive();
+        void Update();
         void SetFrequencyMHz(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
         void SetModemDeviation(float deviationKHz);
@@ -95,8 +102,11 @@ namespace TI_CC1101
         byte readRegister(byte address);
         void writeRegister(byte address, byte value);
         void writeBurstRegister(byte address, byte *values, int valueLen);
+        byte sendStrobe(byte strobeCmd);
         byte setMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         byte setWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         void configure();
+
+        static void gpioISR(void *);
     };
 } // namespace TI_CC1101

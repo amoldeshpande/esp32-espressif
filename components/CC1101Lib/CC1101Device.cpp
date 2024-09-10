@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
+#include <cmath>
 #include <driver/rtc_io.h>
 #include "CC1101Lib.h"
 #include "CC1101Device.h"
@@ -37,13 +37,11 @@ namespace TI_CC1101
         m_spiMaster = spiMaster;
         m_deviceConfig = deviceConfig;
 
-        if(m_deviceConfig.OscilllatorFrequencyMHz != 0)
+        if(m_deviceConfig.OscillatorFrequencyMHz != 0)
         {
-            m_oscillatorFrequencyHz = m_deviceConfig.OscilllatorFrequencyMHz*1'000'000;
+            m_oscillatorFrequencyHz = m_deviceConfig.OscillatorFrequencyMHz*1'000'000;
         }
         m_frequencyIncrement = m_oscillatorFrequencyHz/ kFrequencyDivisor;
-
-        ESP_LOGI(TAG, "CC1101Device::Init");
 
         Reset();
 
@@ -104,13 +102,55 @@ namespace TI_CC1101
             ESP_LOGW(TAG, "CC1101 reset failed"); // reset failed
         }
     }
+    bool CC1101Device::BeginReceive()
+    {
+        bool          bRet = true;
+        gpio_config_t gpioConfig;
+        byte          outData = 0;
+
+        gpioConfig.intr_type    = GPIO_INTR_NEGEDGE; // Falling edge
+        gpioConfig.pin_bit_mask = 1 << m_deviceConfig.RxPin;
+
+        gpioConfig.mode         = GPIO_MODE_INPUT;
+
+        gpioConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
+        gpioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
+
+        CERA(gpio_config(&gpioConfig));
+
+        // disable ISR service
+        CERA(gpio_install_isr_service(0));
+
+        CERA(gpio_isr_handler_add(m_deviceConfig.RxPin, gpioISR, this));
+
+        // Turn on the radio for receive
+        outData = sendStrobe(CC1101_CONFIG::SIDLE);
+        ESP_LOGD(TAG, "SIDLE strobe returned status 0x%X", outData);
+        outData = sendStrobe(CC1101_CONFIG::SRX);
+        ESP_LOGD(TAG, "SRX strobe returned status 0x%X", outData);
+
+        Error:
+        if(!bRet)
+        {
+            ESP_LOGE(TAG, "%s failed", __PRETTY_FUNCTION__);
+        }
+        return false;
+    }
+    void CC1101Device::Update()
+    {
+        if(m_dataReceived)
+        {
+            ESP_LOGI(TAG, "Data received");
+            m_dataReceived = false;
+        }
+    }
     // Page 75 of TI Datasheet
     // Frequency is a 24-bit word set via FREQ0,FREQ1 and FREQ2 registers
     //  (but upper bits 22 and 23 of FREQ2 are always 0)
     //
     // Frequency is calculated as:
     //
-    //        (oscillator freq / divisor) * FREQ[23:0] 
+    //        (oscillator freq / divisor) * FREQ[23:0]
     //
     // In the default case 26 MHz / 65536 = 396.728 Hz  is the multiplier, stored as frequencyIncrement variable
     //
@@ -128,16 +168,18 @@ namespace TI_CC1101
 
         byte freq0 = (byte)(frequencySteps & 0x000000FF);
         byte freq1 = (byte)((frequencySteps & 0x0000FF00) >> 8);
-        byte freq2 = (byte)((frequencySteps & 0x001F0000) >> 16);
+        byte freq2 = (byte)((frequencySteps & 0x003F0000) >> 16);
 
-        ESP_LOGD(TAG,"SetFrequency() -> freq0=0x%X, freq1=0x%X, freq2 = 0x%X", freq0, freq1, freq2);
+        // TODO set ESP_LOGD
+        ESP_LOGI(TAG,"SetFrequency() -> freq0=0x%X, freq1=0x%X, freq2 = 0x%X, result = %g", freq0, freq1, freq2, 
+            m_oscillatorFrequencyHz/(kFrequencyDivisor)*(float)( (freq2 << 16) | (freq1 << 8) |freq0 ));
 
         writeRegister(CC1101_CONFIG::FREQ0, freq0);
         writeRegister(CC1101_CONFIG::FREQ1, freq1);
         writeRegister(CC1101_CONFIG::FREQ2, freq2);
 
-        m_oscillatorFrequencyHz = frequencyMHz * 1'000'000;
-        ESP_LOGI(TAG, "m_oscillatorFrequencyHz is now %g", m_oscillatorFrequencyHz);
+        m_carrierFrequencyMHz = frequencyMHz;
+        ESP_LOGI(TAG, "m_carrierFrequencyMHz is now %g", m_carrierFrequencyMHz);
     }
     // Page 76 of TI Datasheet
     //
@@ -156,11 +198,14 @@ namespace TI_CC1101
     void CC1101Device::SetReceiveChannelFilterBandwidth(float bandwidthKHz)
     {
         byte modemCFG = readRegister(CC1101_CONFIG::MDMCFG4);
-        byte DataRate = (byte)(modemCFG & 0xF);
+        byte DataRate = (byte)(modemCFG & 0x0F);
+
+        //TODO make it LOGD
+        ESP_LOGI(TAG, "mdmcfg4 = 0x%X", modemCFG);
 
         // Page 35 table in an array. The exponent is the horizontal stride (4 columns corresponding to the bit values 00,01,10,11) 
         // Mantissa is the vertical stride (4 rows corresponding to the bit values 00,01,10,11)
-        float constantPart     = m_oscillatorFrequencyHz / 8;
+        float constantPart     = m_oscillatorFrequencyHz / 8/1000;
         float allowableBWKHz[] = {
             constantPart / (4 * 1), constantPart / (4 * 2), constantPart / (4 * 4), constantPart / (4 * 8),
             constantPart / (5 * 1), constantPart / (5 * 2), constantPart / (5 * 4), constantPart / (5 * 8),
@@ -170,33 +215,42 @@ namespace TI_CC1101
         // default to lowest allowed
         byte Exponent = 3;
         byte Mantissa = 3;
-        // scan the array, from index 1
-        for (int i = 1; i < 16; i++)
+        // scan the array.The order of the entries is decreasing and columnwise, so it's a bit awkward to scan 
+        int  scannedCount = 0;
+        int  currentIndex = 4;
+        while(scannedCount < 16)
         {
             // if the bandwidth setting is between two values, choose the closer one
-            if (bandwidthKHz > allowableBWKHz[i])
+            if (bandwidthKHz > allowableBWKHz[currentIndex])
             {
-                int index = i - 1;
+                int previousIndex = currentIndex - 4;
+                int index         = previousIndex;
 
-                float diffFromLarger  = allowableBWKHz[i - 1] - bandwidthKHz;
-                float diffFromSmaller = bandwidthKHz - allowableBWKHz[i];
+                float diffFromLarger  = allowableBWKHz[previousIndex] - bandwidthKHz;
+                float diffFromSmaller = bandwidthKHz - allowableBWKHz[currentIndex];
 
                 if (diffFromLarger > diffFromSmaller)
                 {
-                    index = i;
+                    index = currentIndex;
                 }
                 Mantissa = (byte)(index / 4);            // row in array above
                 Exponent = (byte)(index - Mantissa * 4); // mod
                 break;
             }
+            scannedCount++;
+            currentIndex = currentIndex + 4;
+            if(currentIndex > 15)
+            {
+                currentIndex = currentIndex - 15;
+            }
         }
         byte result = (byte)(((Exponent << 2 | Mantissa) << 4) | DataRate);
 
-        ESP_LOGI(TAG, "SetReceiveChannelFilterBandwidth: setting result=0x%X, Mantissa=0x%X,Exponent=0x%X",  result, Exponent, Mantissa);
+        ESP_LOGI(TAG, "%s:  input bw %g, datarate 0x%X setting result=0x%X, Mantissa=0x%X,Exponent=0x%X",__FUNCTION__, bandwidthKHz,DataRate,  result, Mantissa, Exponent);
         writeRegister(CC1101_CONFIG::MDMCFG4, result);
     }
     /// <summary>
-    /// Sets modem deviation allowed, per page 78 of TI Datasheet
+    /// Sets modem deviation allowed, per page 79 of TI Datasheet
     /// </summary>
     /// <param name="deviationKhz"></param>
     //
@@ -211,7 +265,10 @@ namespace TI_CC1101
     // Bit 0-2 are Mantissa
     void CC1101Device::SetModemDeviation(float deviationKHz)
     {
-        float constantPart            = m_oscillatorFrequencyHz / 131072;
+        // TODO this function seems broken. debug it
+
+
+        float constantPart            = m_oscillatorFrequencyHz / (2<<17);
         float allowableDeviationKHz[] = {
             constantPart * (8 * 1),   constantPart / (8 * 2),   constantPart / (8 * 4),   constantPart / (8 * 8),
             constantPart / (8 * 16),  constantPart / (8 * 32),  constantPart / (8 * 64),  constantPart / (8 * 128),
@@ -254,7 +311,7 @@ namespace TI_CC1101
             }
         }
         byte result = (byte)(Exponent << 4 | Mantissa);
-        ESP_LOGI(TAG, "SetModemDeviation: setting result=0x%X, Mantissa=0x%X,Exponent=0x%X",  result, Exponent, Mantissa);
+        ESP_LOGI(TAG, "%s: setting result=0x%X, Mantissa=0x%X,Exponent=0x%X",__FUNCTION__,  result, Mantissa,Exponent);
         writeRegister(CC1101_CONFIG::DEVIATN, result);
     }
     /// <summary>
@@ -265,7 +322,7 @@ namespace TI_CC1101
     // Page 59 of TI Datasheet
     void CC1101Device::SetOutputPower(int outputPower)
     {
-        float frequencyMHz = m_oscillatorFrequencyHz * 1'000'000;
+        float frequencyMHz = m_carrierFrequencyMHz * 1'000'000;
         byte  paSetting;
         const byte  *currentTable = nullptr;
 
@@ -583,6 +640,17 @@ namespace TI_CC1101
         raiseChipSelect();
     }
 
+    byte CC1101Device::sendStrobe(byte strobeCmd)
+    {
+        byte outStatus;
+        lowerChipSelect();
+        waitForMisoLow();
+        m_spiMaster->WriteByte(strobeCmd,outStatus);
+        raiseChipSelect();
+
+        return outStatus;
+    }
+
     byte CC1101Device::setMultiLayerInductorPower(int outputPower, const byte *currentTable, int currentTableLen)
     {
         byte paSetting;
@@ -679,9 +747,14 @@ namespace TI_CC1101
         CERA(gpio_set_direction(m_deviceConfig.TxPin, GPIO_MODE_OUTPUT));
         CERA(gpio_set_direction(m_deviceConfig.RxPin, GPIO_MODE_INPUT));
 
-        SetFrequencyMHz(m_deviceConfig.OscilllatorFrequencyMHz);
+        SetFrequencyMHz(m_deviceConfig.CarrierFrequencyMHz);
         SetReceiveChannelFilterBandwidth(m_deviceConfig.ReceiveFilterBandwidthKHz);
-        SetModemDeviation(m_deviceConfig.FrequencyDeviationKhz);
+
+        // For these two setting the DEVIATN register has no effect.
+        if( (m_deviceConfig.Modulation != ModulationType::ASK_OOK) && (m_deviceConfig.Modulation != ModulationType::MSK))
+        {
+            SetModemDeviation(m_deviceConfig.FrequencyDeviationKhz);
+        }
         SetOutputPower(m_deviceConfig.TxPower);
         // Set MDMCFG2
         SetModulation(m_deviceConfig.Modulation);
@@ -719,6 +792,15 @@ namespace TI_CC1101
         if(!bRet)
         {
             ESP_LOGW(TAG, "%s failed", __PRETTY_FUNCTION__);
+        }
+    }
+    void CC1101Device::gpioISR(void * thisPtr)
+    {
+        CC1101Device* That = static_cast<CC1101Device*>(thisPtr);
+
+        if(That)
+        {
+            That->m_dataReceived = true;
         }
     }
 

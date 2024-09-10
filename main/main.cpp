@@ -41,7 +41,8 @@ extern "C" void app_main(void)
     CC110DeviceConfig somfyRadioConfig = {
         .TxPin = GPIO_NUM_13,
         .RxPin = GPIO_NUM_12,
-        .OscilllatorFrequencyMHz = 433.92,
+        .OscillatorFrequencyMHz = 26,
+        .CarrierFrequencyMHz = 433.92,
         .ReceiveFilterBandwidthKHz = 812.5,
         .FrequencyDeviationKhz = 47.6,
         .TxPower = -30,
@@ -61,5 +62,13 @@ extern "C" void app_main(void)
     spiMaster->Init(spiConfig);
 
     ESP_LOGI(TAG, "Initializing CC1101");
-    cc1101Device.Init(spiMaster,somfyRadioConfig);
+    assert(cc1101Device.Init(spiMaster,somfyRadioConfig));
+
+    cc1101Device.BeginReceive();
+
+    while(true)
+    {
+        cc1101Device.Update();
+        vTaskDelay(500 / portTICK_PERIOD_MS);
+    }
 }
