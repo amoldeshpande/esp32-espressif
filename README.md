@@ -1,6 +1,7 @@
 Inspiration from several projects:
 Somfy:
-https://github.com/PBearson/ESP32-With-ESP-PROG-Demo  (If you need a full-featured Somfy on ESP32, use this.)
+https://github.com/rstrouse/ESPSomfy-RTS (If you need a full-featured Somfy on ESP32, use this.)
+https://github.com/PBearson/ESP32-With-ESP-PROG-Demo 
 CC1101:
 https://github.com/LSatan/SmartRC-CC1101-Driver-Lib
 https://github.com/mfurga/cc1101/blob/main/cc1101.cc
@@ -11,8 +12,8 @@ and the TI datasheet at https://www.ti.com/lit/ds/symlink/cc1101.pdf?ts=17041093
 
 
 Flashing: 
- - If flashing doesn't find the device on the COM port, hold down the BOOT button while initiating flash.
- - If holding BOOT got it to work, but then it fails with "Failed to communicate with flash chip", try removing the pin 12 connection during flash.
+ - If flashing doesn't find the device on the COM port, hold down the BOOT button while initiating flash. This is caused by a bad driver and I haven't found a driver to fix the issue. 
+ - If holding BOOT got it to start flashing, which then fails with "Failed to communicate with flash chip", try removing  pin 12 connection during flash. If that fixes the issue, consider moving the connection to another pin.
 
 COM port not detected.
 For HiLetGo WROOM-32, the COM port driver seems to be CP210x, so install that and NOT FTDI, otherwise there will be no COM port.

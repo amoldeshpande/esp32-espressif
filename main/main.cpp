@@ -41,7 +41,7 @@ extern "C" void app_main(void)
     CC110DeviceConfig somfyRadioConfig = {
         .TxPin = GPIO_NUM_13,
         .RxPin = GPIO_NUM_14,
-        .OscillatorFrequencyMHz = 26,
+/*        .OscillatorFrequencyMHz = 26,
         .CarrierFrequencyMHz = 433.92,
         .ReceiveFilterBandwidthKHz = 812.5,
         .FrequencyDeviationKhz = 47.6,
@@ -49,12 +49,13 @@ extern "C" void app_main(void)
         .Modulation = ModulationType::ASK_OOK,
         .ManchesterEnabled = true,
         .PacketFmt = PacketFormat::AsyncSerialMode, 
-        .PacketLengthCfg = PacketLengthConfig::Infinite,
+        .PacketLengthCfg = PacketLengthConfig::Variable,
         .DisableDCFilter = true,
         .EnableCRC = false,
         .EnableCRCAutoflush = false,
         .SyncMode = SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold,
-        .AddressCheck = AddressCheckConfiguration::None
+        .AddressCheck = AddressCheckConfiguration::None,
+        .EnableAppendStatusBytes = true*/
     };
 
     esp_log_level_set("*", ESP_LOG_DEBUG);

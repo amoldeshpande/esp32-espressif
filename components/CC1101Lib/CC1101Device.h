@@ -27,20 +27,23 @@ namespace TI_CC1101
     {
         gpio_num_t                TxPin;
         gpio_num_t                RxPin;
-        float                     OscillatorFrequencyMHz;
-        float                     CarrierFrequencyMHz;
-        float                     ReceiveFilterBandwidthKHz;
-        float                     FrequencyDeviationKhz;
-        int                       TxPower; // Also called Output Power in the datasheet
-        ModulationType            Modulation;
-        bool                      ManchesterEnabled;
-        PacketFormat              PacketFmt;
-        PacketLengthConfig        PacketLengthCfg;
-        bool                      DisableDCFilter;
-        bool                      EnableCRC;
-        bool                      EnableCRCAutoflush;
-        SyncWordQualifierMode     SyncMode;
-        AddressCheckConfiguration AddressCheck;
+        float                     OscillatorFrequencyMHz {26};
+        float                     CarrierFrequencyMHz {433.92};
+        float                     ReceiveFilterBandwidthKHz {812.5};
+        float                     FrequencyDeviationKhz {47.6};
+        int                       TxPower {-30}; // Also called Output Power in the datasheet
+        ModulationType            Modulation {ModulationType::ASK_OOK};
+        bool                      ManchesterEnabled {true};
+        PacketFormat              PacketFmt {PacketFormat::AsyncSerialMode}; // this field and PacketlengthCfg go into the PKTCTRL0 register, pg 74
+        PacketLengthConfig        PacketLengthCfg {PacketLengthConfig::Infinite};
+        bool                      DisableDCFilter {true};
+        bool                      EnableCRC {false};
+        bool                      EnableCRCAutoflush {false};
+        SyncWordQualifierMode     SyncMode {SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
+        AddressCheckConfiguration AddressCheck {AddressCheckConfiguration::None};
+        bool                      EnableAppendStatusBytes {false};
+
+        void DebugDump();
     };
     class CC1101Device final
     {
@@ -53,8 +56,6 @@ namespace TI_CC1101
         float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMHz / kFrequencyDivisor;
         float                      m_carrierFrequencyMHz          = 433;
         PATables                   m_currentPATable               = PATables::PA_433;
-        ModulationType             m_currentModulationType        = ModulationType::FSK_2;
-        bool                       m_currentManchesterEnabled     = false;
         // PATABLE is 8 bytes
         byte                       m_PATABLE[8]                   = {0, 0, 0, 0, 0, 0, 0, 0};
         std::shared_ptr<SpiMaster> m_spiMaster;
@@ -64,6 +65,7 @@ namespace TI_CC1101
         const byte kSpiHeaderReadBit       = 0b10000000; // OR this in to set read bit in the header
         const byte kSpiNoBurstAccessMask   = 0b10111111; // No. 2 MSB is burst bit
         const byte kSpiBurstAccessBit      = 0b01000000; // OR this to set burst bit on
+        const byte kRxFifoByteCountMask    = 0b01111111; // High bit is overflow, pg 94
 
         //Pg 92 of datasheet
         const byte kPartNumber = 0x0;
@@ -91,6 +93,7 @@ namespace TI_CC1101
         void SetCRCAutoFlush(bool shouldEnable);
         void SetSyncMode(SyncWordQualifierMode syncMode);
         void SetAddressCheck(AddressCheckConfiguration addressCheckConfig);
+        void SetAppendStatus(bool shouldEnable);
 
       protected:
         bool lowerChipSelect();
@@ -104,12 +107,12 @@ namespace TI_CC1101
         [[nodiscard]] byte writeRegister(byte address, byte value);
         void writeBurstRegister(byte address, byte *values, int valueLen);
         byte sendStrobe(byte strobeCmd);
-        byte setMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
-        byte setWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
+        byte getMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
+        byte getWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         void configure();
 
         void handleCommonStatusCodes(byte status);
-        void readRXFIFO(byte* buffer, int expectedCount);
+        void readRXFIFO(byte* buffer, int expectedCount); // will reset FIFO if overflowed.
 
         static void gpioISR(void *);
     };

@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #ifndef NDEBUG
-#define _DEBUG
+#define _DEBUG 1
 #endif
 namespace TI_CC1101
 {
