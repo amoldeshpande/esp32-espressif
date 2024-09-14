@@ -56,7 +56,7 @@ namespace TI_CC1101
     {
     }
 
-    bool CC1101Device::Init(std::shared_ptr<SpiMaster> spiMaster, CC110DeviceConfig &deviceConfig)
+    bool CC1101Device::Init(std::shared_ptr<SpiMaster>& spiMaster, CC110DeviceConfig &deviceConfig)
     {
         bool bRet   = true;
         m_spiMaster = spiMaster;
@@ -131,16 +131,14 @@ namespace TI_CC1101
     }
     bool CC1101Device::BeginReceive()
     {
-        bool          bRet = true;
-        gpio_config_t gpioConfig;
+        bool          bRet    = true;
         byte          outData = 0;
+        gpio_config_t gpioConfig;
 
-        gpioConfig.intr_type    = GPIO_INTR_ANYEDGE; // Falling edge
+        gpioConfig.intr_type    = GPIO_INTR_NEGEDGE;
         gpioConfig.pin_bit_mask = 1 << m_deviceConfig.RxPin;
-
         gpioConfig.mode         = GPIO_MODE_INPUT;
-
-        gpioConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
+        gpioConfig.pull_up_en   = GPIO_PULLUP_ENABLE;
         gpioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
 
         CERA(gpio_config(&gpioConfig));
@@ -153,11 +151,23 @@ namespace TI_CC1101
         // Turn on the radio for receive
         outData = sendStrobe(CC1101_CONFIG::SIDLE);
         ESP_LOGD(TAG, "SIDLE strobe returned status 0x%0X", outData);
-        outData = sendStrobe(CC1101_CONFIG::SRX);
-        ESP_LOGD(TAG, "SRX strobe returned status 0x%0X", outData);
+        for (int tries = 0; tries < 3; tries++)// Sometimes SRX fails to put chip in receive mode.
+        {
+            byte chipState = 0;
 
-        Error:
-        if(!bRet)
+            outData = sendStrobe(CC1101_CONFIG::SRX);
+            ESP_LOGD(TAG, "SRX strobe returned status 0x%0X", outData);
+
+            chipState = outData & 0b01110000; // check chip state (pg 31)
+            if (chipState != 0)
+            {
+                break;
+            }
+            delayMicroseconds(5);
+        };
+
+    Error:
+        if (!bRet)
         {
             ESP_LOGE(TAG, "%s failed", __PRETTY_FUNCTION__);
         }
@@ -171,6 +181,7 @@ namespace TI_CC1101
             ESP_LOGI(TAG, "Data received %d bytes",val);
             m_dataReceived = false;
         }
+        delayMicroseconds(11000);// TODO remove, should be in main loop if at all
     }
     // Page 75 of TI Datasheet
     // Frequency is a 24-bit word set via FREQ0,FREQ1 and FREQ2 registers
@@ -204,11 +215,11 @@ namespace TI_CC1101
             m_frequencyIncrement*(float)( ((int)freq2 << 16) | ((int)freq1 << 8) |(int)freq0 ),frequencyMHz);
 
         statusCode = writeRegister(CC1101_CONFIG::FREQ0, freq0);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
         statusCode = writeRegister(CC1101_CONFIG::FREQ1, freq1);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
         statusCode = writeRegister(CC1101_CONFIG::FREQ2, freq2);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
 
         m_carrierFrequencyMHz = frequencyMHz;
         ESP_LOGI(TAG, "m_carrierFrequencyMHz is now %g", m_carrierFrequencyMHz);
@@ -221,7 +232,7 @@ namespace TI_CC1101
     //     Exponent is in bits 6 and 7 (Two MSBs) of MDMCFG4
     //     Mantissa is bits 4 and 5
     //
-    // The bottom 4 bits of MDMCFG4 are used to configure the Data rate in the MDMCFG3 register
+    // The bottom 4 bits of MDMCFG4 are used to configure the Data rate exponent with the mantissa in the MDMCFG3 register
     //
     // Page 35 of the TI Datasheet gives a table of ranges for the 4x4 combinations of the 2-bit bitfields.
     //
@@ -231,7 +242,7 @@ namespace TI_CC1101
         byte modemCFG = readRegister(CC1101_CONFIG::MDMCFG4);
         byte DataRate = (byte)(modemCFG & 0x0F);
 
-        ESP_LOGD(TAG, "mdmcfg4 = 0x%0X", modemCFG);
+        ESP_LOGD(TAG, "%s: mdmcfg4 = 0x%0X",__FUNCTION__, modemCFG);
 
         // Page 35 table in an array. The exponent is the horizontal stride (4 columns corresponding to the bit values 00,01,10,11) 
         // Mantissa is the vertical stride (4 rows corresponding to the bit values 00,01,10,11)
@@ -278,7 +289,23 @@ namespace TI_CC1101
 
         ESP_LOGI(TAG, "%s:  input bw %g, datarate 0x%0X setting result=0x%0X, Mantissa=0x%0X,Exponent=0x%0X",__FUNCTION__, bandwidthKHz,DataRate,  result, Mantissa, Exponent);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG4, result);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
+    }
+    /// @brief Set the DataRate Exponent in MDMCFG4 and Mantissa in MDMCFG3
+    /// @param Exponent 
+    /// @param Mantissa 
+    void CC1101Device::SetDataRate(byte Exponent, byte Mantissa)
+    {
+        byte statusCode = 0;
+        byte modem4CFG = readRegister(CC1101_CONFIG::MDMCFG4);
+
+        byte result = ((modem4CFG & ~0x0F) | Exponent);
+        ESP_LOGD(TAG, "%s: Writing to MDMCFG4 -> 0x%0X", __FUNCTION__, result);
+        statusCode = writeRegister(CC1101_CONFIG::MDMCFG4, result);
+        handleCommonStatusCodes(statusCode, false);
+        ESP_LOGD(TAG, "%s: Writing to MDMCFG3 -> 0x%0X", __FUNCTION__, Mantissa);
+        statusCode = writeRegister(CC1101_CONFIG::MDMCFG3, Mantissa);
+        handleCommonStatusCodes(statusCode, false);
     }
     /// <summary>
     /// Sets modem deviation allowed, per page 79 of TI Datasheet
@@ -345,7 +372,7 @@ namespace TI_CC1101
         byte result = (byte)(Exponent << 4 | Mantissa);
         ESP_LOGD(TAG, "%s: setting result=0x%0X, Mantissa=0x%0X,Exponent=0x%0X",__FUNCTION__,  result, Mantissa,Exponent);
         statusCode = writeRegister(CC1101_CONFIG::DEVIATN, result);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
     }
     /// <summary>
     /// Set output power level
@@ -427,7 +454,6 @@ namespace TI_CC1101
             ESP_LOGD(TAG, "PATABLE after: %s", patableFmtStr.c_str());
         }
 #endif
-        
     }
     //
     //  Page 77,89 of TI Datasheet
@@ -440,31 +466,31 @@ namespace TI_CC1101
         byte currentMDMCFG2 = readRegister(CC1101_CONFIG::MDMCFG2);
         byte currentFREND0  = readRegister(CC1101_CONFIG::FREND0);
 
-        byte frend0, mdmcfg2;
+        byte frend0, mdmcfg2 = currentMDMCFG2;
 
         // default to non-ASK_OOK, i.e, PATABLE[0] contains our only power level
-        frend0  = (byte)(currentFREND0 & 0b11110000);
-        mdmcfg2 = currentMDMCFG2;
+        // For ASK_OOK we point to PATABLE[1], because ASK always uses PATABLE[0] for transmitting '0' 
+        frend0  = (byte)(currentFREND0 & 0b11110000); // clear the PA_POWER bits (pg 89)
+
+        currentMDMCFG2 = (currentMDMCFG2 & ~0b01110000);//clear modulation bits
         switch (modulationType)
         {
             case ModulationType::FSK_2:
-                mdmcfg2 = (byte)(currentMDMCFG2 & 0b10001111); // clear bits 4-6
+                mdmcfg2 = (byte)(currentMDMCFG2);
                 break;
             case ModulationType::GFSK:
-                mdmcfg2 = (byte)((currentMDMCFG2 & 0b10001111) | 0b00010000); // 1 in bits 4-6
+                mdmcfg2 = (byte)(currentMDMCFG2  | 0b00010000); // 1 in bits 4-6
                 break;
-            // For ASK_OOK we point to PATABLE[1] and for the rest to PATABLE[0], because ASK always uses PATABLE[0] for
-            // transmitting '0' This assumes we set PATABLE[0] to 0
             case ModulationType::ASK_OOK:
                 frend0  = (byte)(frend0 | 0b00000001);  // 1 in the low nibble
-                mdmcfg2 = (byte)((currentMDMCFG2 & 0b10001111) | 0b00110001); // 011 in bits 4-6
+                mdmcfg2 = (byte)(currentMDMCFG2  | 0b00110000); // 011 in bits 4-6
                 break;
             case ModulationType::FSK_4:
-                mdmcfg2 = (byte)((currentMDMCFG2 & 0b10001111) | 0b01000000); // 100 in bits 4-6
+                mdmcfg2 = (byte)(currentMDMCFG2 | 0b01000000); // 100 in bits 4-6
                 SetManchesterEncoding(false);                                 // Page 43
                 break;
             case ModulationType::MSK:
-                mdmcfg2 = (byte)((currentMDMCFG2 & 0b10001111) | 0b01110000); // 111 in bits 4-6
+                mdmcfg2 = (byte)(currentMDMCFG2 | 0b01110000); // 111 in bits 4-6
                 break;
             case ModulationType::INVALID_2:
             case ModulationType::INVALID_5:
@@ -474,10 +500,10 @@ namespace TI_CC1101
         }
         ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X",__FUNCTION__, mdmcfg2);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, mdmcfg2);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
         ESP_LOGD(TAG, "%s Setting FREND0 0x%0X",__FUNCTION__, frend0);
         statusCode = writeRegister(CC1101_CONFIG::FREND0, frend0);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
     }
     /// <summary>
     /// Sets or unsets Manchester encoding (Pg 77) in register MDMCFG2
@@ -487,14 +513,8 @@ namespace TI_CC1101
     {
         byte statusCode     = 0;
         byte currentMDMCFG2 = readRegister(CC1101_CONFIG::MDMCFG2);
-
-        int currentManchester = ((currentMDMCFG2 & 0b00001000) >> 3);
-        // If already the same
-        if ((currentManchester == 1) == shouldEnable)
-        {
-            return;
-        }
         byte result = (byte)(currentMDMCFG2 & 0b11110111);
+
         if (shouldEnable)
         {
             result |= 0b00001000;
@@ -505,7 +525,44 @@ namespace TI_CC1101
         }
         ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X",__FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, result);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
+    }
+    /// <summary>
+    /// Disable Digital DC blocking filter (Pg 77) in register MDMCFG2
+    /// </summary>
+    void CC1101Device::SetDigitalDCFilter(bool shouldDisable)
+    {
+        byte statusCode     = 0;
+        byte currentMdmcfg2 = readRegister(CC1101_CONFIG::MDMCFG2);
+
+        currentMdmcfg2 = (currentMdmcfg2 & 0b01111111);
+
+        byte setting = (shouldDisable ? 0b10000000:0b00000000) ;
+
+        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X",__FUNCTION__, (byte)(currentMdmcfg2 | setting));
+        statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, (byte)(currentMdmcfg2 | setting));
+        handleCommonStatusCodes(statusCode, false);
+    }
+    /// <summary>
+    /// Sets Sync Mode according to Page 77 in register MDMCFG2
+    ///    Combined sync-word qualifier mode.
+    ///       The values 0 (000) and 4 (100) disables preamble and sync word
+    ///       transmission in TX and preamble and sync word detection in RX.
+    ///       The values 1 (001), 2 (010), 5 (101) and 6 (110) enables 16-bit sync word
+    ///       transmission in TX and 16-bits sync word detection in RX.Only 15 of 16 bits
+    ///       need to match in RX when using setting 1 (001) or 5 (101). The values 3 (011)
+    ///       and 7 (111) enables repeated sync word transmission in TX and 32-bits sync
+    ///       word detection in RX(only 30 of 32 bits need to match).
+    /// </summary>
+    void CC1101Device::SetSyncMode(SyncWordQualifierMode syncMode)
+    {
+        byte statusCode     = 0;
+        byte currentMdmcfg2 = readRegister(CC1101_CONFIG::MDMCFG2);
+        byte result = (byte)((currentMdmcfg2 & 0b11111000) | (int)syncMode);
+
+        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X",__FUNCTION__, result);
+        statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, result);
+        handleCommonStatusCodes(statusCode, false);
     }
     /// <summary>
     /// Set Packet Format (Pg 74) in register PKTCTRL0
@@ -515,12 +572,7 @@ namespace TI_CC1101
     {
         byte statusCode       = 0;
         byte currentPktCtrl0  = readRegister(CC1101_CONFIG::PKTCTRL0);
-        int  currentPktFormat = ((currentPktCtrl0 & 0b00110000) >> 4);
 
-        if (currentPktFormat == (int)packetFormat)
-        {
-            return;
-        }
         byte result = (byte)(currentPktCtrl0 & 0b11001111);
         switch (packetFormat)
         {
@@ -538,24 +590,7 @@ namespace TI_CC1101
         }
         ESP_LOGD(TAG, "%s Setting PKTCTRL0 0x%0X",__FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, result);
-        handleCommonStatusCodes(statusCode);
-    }
-    /// <summary>
-    /// Disable Digital DC blocking filter (Pg 77) in register MDMCFG2
-    /// </summary>
-    void CC1101Device::DisableDigitalDCFilter()
-    {
-        byte statusCode     = 0;
-        byte currentMdmcfg2 = readRegister(CC1101_CONFIG::MDMCFG2);
-        int  currentSetting = (currentMdmcfg2 & 0b10000000) >> 7;
-
-        if (currentSetting == 1)
-        {
-            return;
-        }
-        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X",__FUNCTION__, (byte)(currentMdmcfg2 | 0b10000000));
-        statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, (byte)(currentMdmcfg2 | 0b10000000));
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
     }
     /// <summary>
     /// Set CRC for data (Pg 74) in register PKTCTRL0
@@ -565,12 +600,7 @@ namespace TI_CC1101
     {
         byte statusCode      = 0;
         byte currentPktCtrl0 = readRegister(CC1101_CONFIG::PKTCTRL0);
-        bool currentSetting  = ((currentPktCtrl0 & 0b00000100) >> 2 == 1);
 
-        if ((currentSetting ==1) == shouldEnable)
-        {
-            return;
-        }
         byte result = (byte)(currentPktCtrl0 & 0b11111011);
         if (shouldEnable)
         {
@@ -578,7 +608,7 @@ namespace TI_CC1101
         }
         ESP_LOGD(TAG, "%s Setting PKTCTRL0 0x%0X",__FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, result);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
     }
     /// <summary>
     /// Set CRC Autoflush (Pg 73) in register PKTCTRL1
@@ -590,46 +620,14 @@ namespace TI_CC1101
     {
         byte statusCode      = 0;
         byte currentPktCtrl1 = readRegister(CC1101_CONFIG::PKTCTRL1);
-        bool currentSetting  = ((currentPktCtrl1 & 0b00001000) >> 3 == 1);
-        if ((currentSetting == 1) == shouldEnable)
-        {
-            return;
-        }
-        byte result = (byte)(currentPktCtrl1 & 0b11110111);
+        currentPktCtrl1 = (byte)(currentPktCtrl1 & 0b11110111);
         if (shouldEnable)
         {
-            result |= 0b00001000;
+            currentPktCtrl1 |= 0b00001000;
         }
-        ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X",__FUNCTION__, result);
-        statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, result);
-        handleCommonStatusCodes(statusCode);
-    }
-    /// <summary>
-    /// Sets Sync Mode according to Page 77 in register MDMCFG2
-    ///    Combined sync-word qualifier mode.
-    ///       The values 0 (000) and 4 (100) disables preamble and sync word
-    ///       transmission in TX and preamble and sync word detection in RX.
-    ///       The values 1 (001), 2 (010), 5 (101) and 6 (110) enables 16-bit sync word
-    ///       transmission in TX and 16-bits sync word detection in RX.Only 15 of 16 bits
-    ///       need to match in RX when using setting 1 (001) or 5 (101). The values 3 (011)
-    ///       and 7 (111) enables repeated sync word transmission in TX and 32-bits sync
-    ///       word detection in RX(only 30 of 32 bits need to match).
-    /// </summary>
-    void CC1101Device::SetSyncMode(SyncWordQualifierMode syncMode)
-    {
-        byte statusCode     = 0;
-        byte currentMdmcfg2 = readRegister(CC1101_CONFIG::MDMCFG2);
-        int  currentSetting = currentMdmcfg2 & 0b00000111;
-
-        if ((int)syncMode == currentSetting)
-        {
-            return;
-        }
-        byte result = (byte)((currentMdmcfg2 & 0b11111000) | (int)syncMode);
-
-        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X",__FUNCTION__, result);
-        statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, result);
-        handleCommonStatusCodes(statusCode);
+        ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X",__FUNCTION__, currentPktCtrl1);
+        statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, currentPktCtrl1);
+        handleCommonStatusCodes(statusCode, false);
     }
     /// <summary>
     /// Set Address Check (Pg 73) in register PKTCTRL1
@@ -639,17 +637,11 @@ namespace TI_CC1101
     {
         byte statusCode     = 0;
         byte currentPktCtrl1 = readRegister(CC1101_CONFIG::PKTCTRL1);
-        int  currentSetting  = currentPktCtrl1 & 0b00000011;
+        currentPktCtrl1 = (byte)((currentPktCtrl1 & 0b11111100) | (int)addressCheckConfig);
 
-        if ((int)addressCheckConfig == currentSetting)
-        {
-            return;
-        }
-        byte result = (byte)((currentPktCtrl1 & 0b11111100) | (int)addressCheckConfig);
-
-        ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X",__FUNCTION__, result);
-        statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, result);
-        handleCommonStatusCodes(statusCode);
+        ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X",__FUNCTION__, currentPktCtrl1);
+        statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, currentPktCtrl1);
+        handleCommonStatusCodes(statusCode, false);
     }
 
     /// @brief When enabled, two status bytes will be appended to the payload of the packet. The status bytes contain RSSI and LQI values, as well as CRC OK.
@@ -658,17 +650,11 @@ namespace TI_CC1101
     {
         byte statusCode     = 0;
         byte currentPktCtrl1 = readRegister(CC1101_CONFIG::PKTCTRL1);
-        int  currentSetting  = currentPktCtrl1 & 0b00000100;
-
-        if ((int)shouldEnable == currentSetting)
-        {
-            return;
-        }
         byte result = (byte)((currentPktCtrl1 & 0b11111011) | (shouldEnable ? 0b100 : 0b000) );
 
         ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X",__FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, result);
-        handleCommonStatusCodes(statusCode);
+        handleCommonStatusCodes(statusCode, false);
     }
 
     bool CC1101Device::lowerChipSelect()
@@ -779,6 +765,14 @@ namespace TI_CC1101
             m_spiMaster->WriteByte(CC1101_CONFIG::SFRX, resetStatus);
             ESP_LOGW(TAG, "RX_FIFO overflow, new status 0x%0X", resetStatus);
         }
+    }
+
+    void CC1101Device::setMDMCFG2()
+    {
+        SetModulation(m_deviceConfig.Modulation);
+        SetDigitalDCFilter(m_deviceConfig.DisableDCFilter);
+        SetManchesterEncoding(m_deviceConfig.ManchesterEnabled);
+        SetSyncMode(m_deviceConfig.SyncMode);
     }
 
     byte CC1101Device::writeRegister(byte address, byte value)
@@ -913,22 +907,30 @@ namespace TI_CC1101
         switch (m_deviceConfig.PacketFmt)
         {
             case PacketFormat::Normal:
-                statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
-                handleCommonStatusCodes(statusCode);
+                handleCommonStatusCodes(statusCode, false);
                 statusCode = writeRegister(CC1101_CONFIG::IOCFG0, (byte)ConfigValues::GDx_CFG_LowerSixBits::SYNC_WORD_OR_RX_PKT_DISCARDED_OR_TX_UNDERFLOW);
-                handleCommonStatusCodes(statusCode);
+                handleCommonStatusCodes(statusCode, false);
                 statusCode = writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::HIGH_IMPEDANCE_3_STATE);
-                handleCommonStatusCodes(statusCode);
+                handleCommonStatusCodes(statusCode, false);
+                ESP_LOGD(TAG, "%s: Writing PKTCTRL0 0x%X for Packet format %d", __FUNCTION__, pktctrlVal,(int)m_deviceConfig.PacketFmt);
+                statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
+
+                // why?
+                SetDataRate(11, 0xF8);
                 break;
             case PacketFormat::AsyncSerialMode:
             {
                 statusCode = writeRegister(CC1101_CONFIG::IOCFG0, (byte)ConfigValues::GDx_CFG_LowerSixBits::SERIAL_DATA_OUTPUT);
-                handleCommonStatusCodes(statusCode);
+                handleCommonStatusCodes(statusCode, false);
                 // TODO figure out why these
                 statusCode = writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::SERIAL_DATA_OUTPUT);
-                handleCommonStatusCodes(statusCode);
+                handleCommonStatusCodes(statusCode, false);
+                ESP_LOGD(TAG, "%s: Writing PKTCTRL0 0x%X for Packet format %d", __FUNCTION__, pktctrlVal,(int)m_deviceConfig.PacketFmt);
                 statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
-                handleCommonStatusCodes(statusCode);
+                handleCommonStatusCodes(statusCode, false);
+
+                // why?
+                SetDataRate(7, 0x93);
             }
                 break;
             default:
@@ -942,23 +944,16 @@ namespace TI_CC1101
         SetFrequencyMHz(m_deviceConfig.CarrierFrequencyMHz);
         SetReceiveChannelFilterBandwidth(m_deviceConfig.ReceiveFilterBandwidthKHz);
 
-        // For these two setting the DEVIATN register has no effect.
+        // For this setting the DEVIATN register has no effect.
         if (m_deviceConfig.Modulation != ModulationType::ASK_OOK)
         {
             SetModemDeviation(m_deviceConfig.FrequencyDeviationKhz);
         }
         // Set MDMCFG2,FREND0
-        SetOutputPower(m_deviceConfig.TxPower);
-        SetModulation(m_deviceConfig.Modulation);
-        SetManchesterEncoding(m_deviceConfig.ManchesterEnabled);
+        setMDMCFG2();
 
-        if (m_deviceConfig.DisableDCFilter)
-        {
-            DisableDigitalDCFilter();
-        }
         SetCRC(m_deviceConfig.EnableCRC);
         SetCRCAutoFlush(m_deviceConfig.EnableCRCAutoflush);
-        SetSyncMode(m_deviceConfig.SyncMode);
         SetAddressCheck(m_deviceConfig.AddressCheck);
         SetAppendStatus(m_deviceConfig.EnableAppendStatusBytes);
 
@@ -968,7 +963,7 @@ namespace TI_CC1101
             ESP_LOGW(TAG, "%s failed", __PRETTY_FUNCTION__);
         }
     }
-    void CC1101Device::handleCommonStatusCodes(byte status)
+    void CC1101Device::handleCommonStatusCodes(byte status, bool wasReadOperation)
     {
         byte                   fifoBytesAvail = status & 0x0F;
         byte                   statusBits     = status & 0b01110000;
@@ -992,7 +987,7 @@ namespace TI_CC1101
                 break;
             case StatusByteStateMachineMode::ReceiveMode:
             {
-                if(fifoBytesAvail > 0)
+                if((fifoBytesAvail > 0) && wasReadOperation)
                 {
                     byte fifoBytes[fifoBytesAvail];
                     readRXFIFO(fifoBytes, fifoBytesAvail);

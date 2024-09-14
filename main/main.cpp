@@ -70,6 +70,5 @@ extern "C" void app_main(void)
     while(true)
     {
         cc1101Device.Update();
-        vTaskDelay(500 / portTICK_PERIOD_MS);
     }
 }

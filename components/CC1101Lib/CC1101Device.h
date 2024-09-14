@@ -28,20 +28,20 @@ namespace TI_CC1101
         gpio_num_t                TxPin;
         gpio_num_t                RxPin;
         float                     OscillatorFrequencyMHz {26};
-        float                     CarrierFrequencyMHz {433.92};
+        float                     CarrierFrequencyMHz {433.62};
         float                     ReceiveFilterBandwidthKHz {812.5};
         float                     FrequencyDeviationKhz {47.6};
-        int                       TxPower {-30}; // Also called Output Power in the datasheet
+        int                       TxPower {10}; // Also called Output Power in the datasheet
         ModulationType            Modulation {ModulationType::ASK_OOK};
         bool                      ManchesterEnabled {true};
         PacketFormat              PacketFmt {PacketFormat::AsyncSerialMode}; // this field and PacketlengthCfg go into the PKTCTRL0 register, pg 74
-        PacketLengthConfig        PacketLengthCfg {PacketLengthConfig::Infinite};
+        PacketLengthConfig        PacketLengthCfg {PacketLengthConfig::Infinite}; // Currently, there are some harcoded side-effects in configure(). TODO figure out why
         bool                      DisableDCFilter {true};
         bool                      EnableCRC {false};
         bool                      EnableCRCAutoflush {false};
         SyncWordQualifierMode     SyncMode {SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
         AddressCheckConfiguration AddressCheck {AddressCheckConfiguration::None};
-        bool                      EnableAppendStatusBytes {false};
+        bool                      EnableAppendStatusBytes {true};
 
         void DebugDump();
     };
@@ -77,21 +77,22 @@ namespace TI_CC1101
       public:
         CC1101Device();
         ~CC1101Device();
-        bool Init(std::shared_ptr<SpiMaster> spiMaster, CC110DeviceConfig &deviceConfig);
+        bool Init(std::shared_ptr<SpiMaster>& spiMaster, CC110DeviceConfig &deviceConfig);
         void Reset();
         bool BeginReceive();
         void Update();
         void SetFrequencyMHz(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
+        void SetDataRate(byte Exponent, byte Mantissa);
         void SetModemDeviation(float deviationKHz);
         void SetOutputPower(int outputPower);
         void SetModulation(ModulationType modulationType);
+        void SetDigitalDCFilter(bool shouldDisable);
         void SetManchesterEncoding(bool shouldEnable);
+        void SetSyncMode(SyncWordQualifierMode syncMode);
         void SetPacketFormat(PacketFormat packetFormat);
-        void DisableDigitalDCFilter();
         void SetCRC(bool shouldEnable);
         void SetCRCAutoFlush(bool shouldEnable);
-        void SetSyncMode(SyncWordQualifierMode syncMode);
         void SetAddressCheck(AddressCheckConfiguration addressCheckConfig);
         void SetAppendStatus(bool shouldEnable);
 
@@ -111,8 +112,10 @@ namespace TI_CC1101
         byte getWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
         void configure();
 
-        void handleCommonStatusCodes(byte status);
+        void handleCommonStatusCodes(byte status, bool wasReadOperation);
         void readRXFIFO(byte* buffer, int expectedCount); // will reset FIFO if overflowed.
+
+        void setMDMCFG2();
 
         static void gpioISR(void *);
     };
