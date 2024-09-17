@@ -22,26 +22,28 @@
 namespace TI_CC1101
 {
     class SpiMaster;
-    
+
     struct CC110DeviceConfig
     {
         gpio_num_t                TxPin;
         gpio_num_t                RxPin;
-        float                     OscillatorFrequencyMHz {26};
-        float                     CarrierFrequencyMHz {433.62};
-        float                     ReceiveFilterBandwidthKHz {812.5};
-        float                     FrequencyDeviationKhz {47.6};
-        int                       TxPower {10}; // Also called Output Power in the datasheet
-        ModulationType            Modulation {ModulationType::ASK_OOK};
-        bool                      ManchesterEnabled {true};
-        PacketFormat              PacketFmt {PacketFormat::AsyncSerialMode}; // this field and PacketlengthCfg go into the PKTCTRL0 register, pg 74
-        PacketLengthConfig        PacketLengthCfg {PacketLengthConfig::Infinite}; // Currently, there are some harcoded side-effects in configure(). TODO figure out why
-        bool                      DisableDCFilter {true};
-        bool                      EnableCRC {false};
-        bool                      EnableCRCAutoflush {false};
-        SyncWordQualifierMode     SyncMode {SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
-        AddressCheckConfiguration AddressCheck {AddressCheckConfiguration::None};
-        bool                      EnableAppendStatusBytes {true};
+        float                     OscillatorFrequencyMHz{26};
+        float                     CarrierFrequencyMHz{433.62};
+        float                     ReceiveFilterBandwidthKHz{812.5};
+        float                     FrequencyDeviationKhz{47.6};
+        int                       TxPower{10}; // Also called Output Power in the datasheet
+        ModulationType            Modulation{ModulationType::ASK_OOK};
+        bool                      ManchesterEnabled{true};
+        PacketFormat              PacketFmt{PacketFormat::AsyncSerialMode};      // this field and PacketlengthCfg go into the PKTCTRL0 register, pg 74
+        PacketLengthConfig        PacketLengthCfg{PacketLengthConfig::Infinite}; // Currently, there are some harcoded side-effects in configure(). TODO figure out why
+        bool                      DisableDCFilter{true};
+        bool                      EnableCRC{false};
+        bool                      EnableCRCAutoflush{false};
+        SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
+        AddressCheckConfiguration AddressCheck{AddressCheckConfiguration::None};
+        bool                      EnableAppendStatusBytes{true};
+
+        QueueHandle_t InterruptQueue;
 
         void DebugDump();
     };
@@ -52,7 +54,7 @@ namespace TI_CC1101
         const float                kDefaultOscillatorFrequencyMHz = 26;
         const float                kFrequencyDivisor              = 2 << 16;
         float                      m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMHz * (1'000'000);
-        // see SetFrequency() 
+        // see SetFrequency()
         float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMHz / kFrequencyDivisor;
         float                      m_carrierFrequencyMHz          = 433;
         PATables                   m_currentPATable               = PATables::PA_433;
@@ -67,17 +69,19 @@ namespace TI_CC1101
         const byte kSpiBurstAccessBit      = 0b01000000; // OR this to set burst bit on
         const byte kRxFifoByteCountMask    = 0b01111111; // High bit is overflow, pg 94
 
-        //Pg 92 of datasheet
-        const byte kPartNumber = 0x0;
+        // Pg 92 of datasheet
+        const byte kPartNumber  = 0x0;
         const byte kChipVersion = 0x14;
 
         // State variables
         bool m_dataReceived = false;
 
+        QueueHandle_t m_ISRQueueHandle;
+
       public:
         CC1101Device();
         ~CC1101Device();
-        bool Init(std::shared_ptr<SpiMaster>& spiMaster, CC110DeviceConfig &deviceConfig);
+        bool Init(std::shared_ptr<SpiMaster> &spiMaster, CC110DeviceConfig &deviceConfig);
         void Reset();
         bool BeginReceive();
         void Update();
@@ -97,26 +101,29 @@ namespace TI_CC1101
         void SetAppendStatus(bool shouldEnable);
 
       protected:
-        bool lowerChipSelect();
-        bool raiseChipSelect();
-        void waitForMisoLow();
-        bool digitalWrite(int pin, uint32_t value);
-        void delayMilliseconds(int millis);
-        void delayMicroseconds(int micros);
+        bool               lowerChipSelect();
+        bool               raiseChipSelect();
+        void               waitForMisoLow();
+        void               ensureChipIdle();
+        void               enableReceiveMode();
+        bool               digitalWrite(int pin, uint32_t value);
+        void               delayMilliseconds(int millis);
         [[nodiscard]] byte readRegister(byte address);
-        bool readBurstRegister(byte address, byte *buffer, int len);
+        bool               readBurstRegister(byte address, byte *buffer, int len);
         [[nodiscard]] byte writeRegister(byte address, byte value);
-        void writeBurstRegister(byte address, byte *values, int valueLen);
-        byte sendStrobe(byte strobeCmd);
-        byte getMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
-        byte getWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
-        void configure();
+        void               writeBurstRegister(byte address, byte *values, int valueLen);
+        byte               sendStrobe(byte strobeCmd);
+        byte               getMultiLayerInductorPower(int outPower, const byte *currentTable, int currentTableLen);
+        byte               getWireWoundInductorPower(int outPower, const byte *currentTable, int currentTableLen);
+
+        void               configure();
+        void               regConfig();
 
         void handleCommonStatusCodes(byte status, bool wasReadOperation);
-        void readRXFIFO(byte* buffer, int expectedCount); // will reset FIFO if overflowed.
+        void readRXFIFO(byte *buffer, int expectedCount); // will reset FIFO if overflowed.
 
         void setMDMCFG2();
 
-        static void gpioISR(void *);
+        static void IRAM_ATTR gpioISR(void *);
     };
 } // namespace TI_CC1101

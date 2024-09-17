@@ -24,10 +24,17 @@
 static const char *TAG = "main";
 using namespace TI_CC1101;
 
+static QueueHandle_t sg_CC1101_ISRQueueHandle;
+
 extern "C" void app_main(void)
 {
     CC1101Device cc1101Device; 
+
+    sg_CC1101_ISRQueueHandle = xQueueCreate(10, sizeof(CC1101Device *));
+
     auto spiMaster = std::make_shared<SpiMaster>();
+
+    //https://randomnerdtutorials.com/esp32-pinout-reference-gpios/, VSPI Pinout
     SpiConfig spiConfig = {
         .misoPin = GPIO_NUM_19,
         .mosiPin = GPIO_NUM_23,
@@ -41,6 +48,7 @@ extern "C" void app_main(void)
     CC110DeviceConfig somfyRadioConfig = {
         .TxPin = GPIO_NUM_13,
         .RxPin = GPIO_NUM_14,
+        .InterruptQueue = sg_CC1101_ISRQueueHandle
 /*        .OscillatorFrequencyMHz = 26,
         .CarrierFrequencyMHz = 433.92,
         .ReceiveFilterBandwidthKHz = 812.5,
@@ -59,6 +67,7 @@ extern "C" void app_main(void)
     };
 
     esp_log_level_set("*", ESP_LOG_DEBUG);
+
     ESP_LOGI(TAG, "Initializing SPI");
     spiMaster->Init(spiConfig);
 
