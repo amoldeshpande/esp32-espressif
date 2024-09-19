@@ -143,7 +143,7 @@ namespace TI_CC1101
         ESP_LOGD(TAG, "%s gpioconfig pin mask is 0x%0X", __FUNCTION__, (int)gpioConfig.pin_bit_mask);
         CERA(gpio_config(&gpioConfig));
 
-        CERA(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
+        CERA(gpio_install_isr_service(0));
 
         CERA(gpio_isr_handler_add(m_deviceConfig.RxPin, gpioISR, this));
 
@@ -164,9 +164,9 @@ namespace TI_CC1101
         if (xQueueReceive(m_ISRQueueHandle, &ignore, 0) == pdTRUE)
         {
             ESP_LOGD(TAG, "interrupt received");
-            // esp_intr_dump(NULL);
         }
-        delayMilliseconds(10);
+        delayMilliseconds(100);
+//        esp_intr_dump(NULL);
     }
     // Page 75 of TI Datasheet
     // Frequency is a 24-bit word set via FREQ0,FREQ1 and FREQ2 registers
@@ -973,7 +973,6 @@ namespace TI_CC1101
     void CC1101Device::configure()
     {
         byte statusCode = 0;
-        bool bRet       = true;
         byte pktctrlVal = (byte)(((int)m_deviceConfig.PacketFmt << 4 | (int)m_deviceConfig.PacketLengthCfg));
 
         // Set PKTCTRL0
@@ -1009,9 +1008,6 @@ namespace TI_CC1101
                 ESP_LOGW(TAG, "Unhandled Rx/Tx Packet format");
                 break;
         }
-        // Should be GDO0, GDO2 on the esp
-        CERA(gpio_set_direction(m_deviceConfig.TxPin, GPIO_MODE_OUTPUT));
-        CERA(gpio_set_direction(m_deviceConfig.RxPin, GPIO_MODE_INPUT));
 
         SetFrequencyMHz(m_deviceConfig.CarrierFrequencyMHz);
         SetReceiveChannelFilterBandwidth(m_deviceConfig.ReceiveFilterBandwidthKHz);
@@ -1031,11 +1027,6 @@ namespace TI_CC1101
         SetAddressCheck(m_deviceConfig.AddressCheck);
         SetAppendStatus(m_deviceConfig.EnableAppendStatusBytes);
 
-    Error:
-        if (!bRet)
-        {
-            ESP_LOGW(TAG, "%s failed", __PRETTY_FUNCTION__);
-        }
     }
     void CC1101Device::regConfig()
     {

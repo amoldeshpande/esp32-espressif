@@ -41,7 +41,7 @@ extern "C" void app_main(void)
         .clockPin = GPIO_NUM_18,
         .chipSelectPin = GPIO_NUM_5,
         .clockFrequencyHz = 4'000'000,
-        .queueSize = 1,
+        .queueSize = 8,
         .spiMode = SpiMode::ModeZero,
         .spiHost = Esp32SPIHost::VSPI
     };
@@ -49,21 +49,6 @@ extern "C" void app_main(void)
         .TxPin = GPIO_NUM_13,
         .RxPin = GPIO_NUM_14,
         .InterruptQueue = sg_CC1101_ISRQueueHandle
-/*        .OscillatorFrequencyMHz = 26,
-        .CarrierFrequencyMHz = 433.92,
-        .ReceiveFilterBandwidthKHz = 812.5,
-        .FrequencyDeviationKhz = 47.6,
-        .TxPower = -30,
-        .Modulation = ModulationType::ASK_OOK,
-        .ManchesterEnabled = true,
-        .PacketFmt = PacketFormat::AsyncSerialMode, 
-        .PacketLengthCfg = PacketLengthConfig::Variable,
-        .DisableDCFilter = true,
-        .EnableCRC = false,
-        .EnableCRCAutoflush = false,
-        .SyncMode = SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold,
-        .AddressCheck = AddressCheckConfiguration::None,
-        .EnableAppendStatusBytes = true*/
     };
 
     esp_log_level_set("*", ESP_LOG_DEBUG);
