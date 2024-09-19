@@ -9,6 +9,8 @@ https://github.com/mfurga/cc1101/blob/main/cc1101.cc
 https://github.com/nopnop2002/esp-idf-cc1101/blob/main/components/cc1101/cc1101.c
 
 and the TI datasheet at https://www.ti.com/lit/ds/symlink/cc1101.pdf?ts=1704109305538
+SPI Access: https://www.ti.com/lit/an/swra112b/swra112b.pdf?ts=1726759618047&ref_url=https%253A%252F%252Fe2e.ti.com%252F
+design note: https://www.ti.com/lit/an/swra215e/swra215e.pdf?ts=1726734847449 
 
 
 Flashing: 

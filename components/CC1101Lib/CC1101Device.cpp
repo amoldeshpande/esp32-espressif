@@ -161,11 +161,10 @@ namespace TI_CC1101
     void CC1101Device::Update()
     {
         uint32_t ignore = 0;
-        if (xQueueReceive(m_ISRQueueHandle, &ignore, 0) == pdTRUE)
+        if (xQueueReceive(m_ISRQueueHandle, &ignore, pdTICKS_TO_MS(100)) == pdTRUE)
         {
-            ESP_LOGD(TAG, "interrupt received");
+            ESP_LOGD(TAG, "interrupt received gpio level %d", 0);//gpio_get_level(m_deviceConfig.RxPin));
         }
-        delayMilliseconds(100);
 //        esp_intr_dump(NULL);
     }
     // Page 75 of TI Datasheet
@@ -231,7 +230,7 @@ namespace TI_CC1101
 
         // Page 35 table in an array. The exponent is the horizontal stride (4 columns corresponding to the bit values 00,01,10,11)
         // Mantissa is the vertical stride (4 rows corresponding to the bit values 00,01,10,11)
-        float constantPart     = m_oscillatorFrequencyHz / 8 / 1000;
+        float constantPart     = m_oscillatorFrequencyHz / 8.0f / 1000.0f;
         float allowableBWKHz[] = {
             constantPart / (4 * 1), constantPart / (4 * 2), constantPart / (4 * 4), constantPart / (4 * 8),
             constantPart / (5 * 1), constantPart / (5 * 2), constantPart / (5 * 4), constantPart / (5 * 8),
@@ -288,7 +287,7 @@ namespace TI_CC1101
 
         byte result = ((modem4CFG & ~0x0F) | Exponent);
 
-        ESP_LOGD(TAG, "%s: DataRate expected -> %g", __FUNCTION__, (256 + Mantissa) * (2 << Exponent) / (2 << 28) * m_oscillatorFrequencyHz);
+        ESP_LOGD(TAG, "%s: DataRate expected -> %g ", __FUNCTION__, (float)(256 + Mantissa) * (2 << Exponent) / (float)(2 << 28) * m_oscillatorFrequencyHz);
 
         ensureChipIdle();
 
@@ -1008,24 +1007,31 @@ namespace TI_CC1101
                 ESP_LOGW(TAG, "Unhandled Rx/Tx Packet format");
                 break;
         }
-
-        SetFrequencyMHz(m_deviceConfig.CarrierFrequencyMHz);
+        /// XXXXX
         SetReceiveChannelFilterBandwidth(m_deviceConfig.ReceiveFilterBandwidthKHz);
 
+        /* XXXXX
+        SetFrequencyMHz(m_deviceConfig.CarrierFrequencyMHz);
+        SetReceiveChannelFilterBandwidth(m_deviceConfig.ReceiveFilterBandwidthKHz);
+        */
+
+        /* XXXXX 
         // For this setting the DEVIATN register has no effect.
         if (m_deviceConfig.Modulation != ModulationType::ASK_OOK)
         {
             SetModemDeviation(m_deviceConfig.FrequencyDeviationKhz);
         }
+        */
 
-        SetOutputPower(m_deviceConfig.TxPower);
+        //xxxxx  SetOutputPower(m_deviceConfig.TxPower);
         // Set MDMCFG2,FREND0
-        setMDMCFG2();
+        //xxxxx  setMDMCFG2();
 
-        SetCRC(m_deviceConfig.EnableCRC);
+        /* xxxxx  SetCRC(m_deviceConfig.EnableCRC);
         SetCRCAutoFlush(m_deviceConfig.EnableCRCAutoflush);
         SetAddressCheck(m_deviceConfig.AddressCheck);
         SetAppendStatus(m_deviceConfig.EnableAppendStatusBytes);
+        */
 
     }
     void CC1101Device::regConfig()
@@ -1034,6 +1040,7 @@ namespace TI_CC1101
 
         ensureChipIdle();
 
+        /*
         returnValue = writeRegister(CC1101_CONFIG::FSCTRL1, 0x06);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::MDMCFG0, 0xF8);
@@ -1044,20 +1051,24 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::DEVIATN, 0x47);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::FREND1, 0x56);
+        */
+        returnValue = writeRegister(CC1101_CONFIG::FREND1, 0xB6);// 0x56);
         handleCommonStatusCodes(returnValue, false);
+        /*
         returnValue = writeRegister(CC1101_CONFIG::MCSM0, 0x18);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FOCCFG, 0x16);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::BSCFG, 0x1C);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL2, 0xC7);
+        */
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL2, 0x03);// 0xC7);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::AGCCTRL1, 0x00);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL0, 0xB2);
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL0, 0x91);// 0xB2);
         handleCommonStatusCodes(returnValue, false);
+        /*
         returnValue = writeRegister(CC1101_CONFIG::FSCAL3, 0xE9);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FSCAL2, 0x2A);
@@ -1068,10 +1079,14 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FSTEST, 0x59);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::TEST2, 0x81);
+        */
+        returnValue = writeRegister(CC1101_CONFIG::TEST2, 0x88);//0x81);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::TEST1, 0x35);
+        returnValue = writeRegister(CC1101_CONFIG::TEST1, 0x31);//0x35);
         handleCommonStatusCodes(returnValue, false);
+        returnValue = writeRegister(CC1101_CONFIG::FIFOTHR, 0x07);
+        handleCommonStatusCodes(returnValue, false);
+        /*
         returnValue = writeRegister(CC1101_CONFIG::TEST0, 0x09);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::PKTCTRL1, 0x04);
@@ -1080,6 +1095,7 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::PKTLEN, 0x00);
         handleCommonStatusCodes(returnValue, false);
+        */
     }
     void CC1101Device::handleCommonStatusCodes(byte status, bool wasReadOperation)
     {
