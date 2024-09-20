@@ -39,7 +39,7 @@ namespace TI_CC1101
         bool                      DisableDCFilter{true};
         bool                      EnableCRC{false};
         bool                      EnableCRCAutoflush{false};
-        SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
+        SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync};
         AddressCheckConfiguration AddressCheck{AddressCheckConfiguration::None};
         bool                      EnableAppendStatusBytes{true};
 
@@ -52,10 +52,9 @@ namespace TI_CC1101
       protected:
         // 26 MHz crystal by default. Apparently it can be 27 as well according to docs.
         const float                kDefaultOscillatorFrequencyMHz = 26;
-        const float                kFrequencyDivisor              = 2 << 16;
+        const float                kFrequencyDivisor              = 1 << 16;
         float                      m_oscillatorFrequencyHz        = kDefaultOscillatorFrequencyMHz * (1'000'000);
         // see SetFrequency()
-        float                      m_frequencyIncrement           = kDefaultOscillatorFrequencyMHz / kFrequencyDivisor;
         float                      m_carrierFrequencyMHz          = 433;
         PATables                   m_currentPATable               = PATables::PA_433;
         // PATABLE is 8 bytes
@@ -104,7 +103,6 @@ namespace TI_CC1101
         bool               lowerChipSelect();
         bool               raiseChipSelect();
         void               waitForMisoLow();
-        void               ensureChipIdle();
         void               enableReceiveMode();
         bool               digitalWrite(int pin, uint32_t value);
         void               delayMilliseconds(int millis);

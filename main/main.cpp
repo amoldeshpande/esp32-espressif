@@ -59,19 +59,6 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Initializing CC1101");
     assert(cc1101Device.Init(spiMaster,somfyRadioConfig));
 
-    ///xxxxxxx
-    cc1101Device.SetFrequencyMHz(somfyRadioConfig.CarrierFrequencyMHz);
-    cc1101Device.SetReceiveChannelFilterBandwidth(somfyRadioConfig.ReceiveFilterBandwidthKHz);
-    cc1101Device.SetOutputPower(10);
-    cc1101Device.SetModulation(somfyRadioConfig.Modulation);
-    cc1101Device.SetManchesterEncoding(somfyRadioConfig.ManchesterEnabled);
-    cc1101Device.SetPacketFormat(somfyRadioConfig.PacketFmt);
-    cc1101Device.SetDigitalDCFilter(somfyRadioConfig.DisableDCFilter);
-    cc1101Device.SetCRC(somfyRadioConfig.EnableCRC);
-    cc1101Device.SetCRCAutoFlush(somfyRadioConfig.EnableCRCAutoflush);
-    cc1101Device.SetSyncMode(somfyRadioConfig.SyncMode);
-    cc1101Device.SetAddressCheck(somfyRadioConfig.AddressCheck);
-
     cc1101Device.BeginReceive();
 
     while(true)
