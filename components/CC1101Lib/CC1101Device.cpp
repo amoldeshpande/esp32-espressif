@@ -75,6 +75,8 @@ namespace TI_CC1101
 
         delayMilliseconds(1);
 
+        DumpRegisters();
+
         byte partNumber  = readRegister(CC1101_CONFIG::PARTNUM);
         byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
 
@@ -132,10 +134,10 @@ namespace TI_CC1101
         bool          bRet    = true;
         gpio_config_t gpioConfig;
 
-        gpioConfig.intr_type    = GPIO_INTR_ANYEDGE;
+        gpioConfig.intr_type    = GPIO_INTR_NEGEDGE;
         gpioConfig.pin_bit_mask = 1 << m_deviceConfig.RxPin;
         gpioConfig.mode         = GPIO_MODE_INPUT;
-        gpioConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
+        gpioConfig.pull_up_en   = GPIO_PULLUP_ENABLE;
         gpioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
 
         ESP_LOGD(TAG, "%s gpioconfig pin mask is 0x%0X", __FUNCTION__, (int)gpioConfig.pin_bit_mask);
@@ -695,6 +697,82 @@ namespace TI_CC1101
         handleCommonStatusCodes(statusCode, false);
     }
 
+    // Dumps in SmartRF Studio order so we can compare
+    void CC1101Device::DumpRegisters()
+    {
+#if _DEBUG
+        ESP_LOGD(TAG, "IOCFG2:              0x%X", readRegister(CC1101_CONFIG::IOCFG2));
+        ESP_LOGD(TAG, "IOCFG1:              0x%X", readRegister(CC1101_CONFIG::IOCFG1));
+        ESP_LOGD(TAG, "IOCFG0:              0x%X", readRegister(CC1101_CONFIG::IOCFG0));
+        ESP_LOGD(TAG, "FIFOTHR:             0x%X", readRegister(CC1101_CONFIG::FIFOTHR));
+        ESP_LOGD(TAG, "SYNC1:               0x%X", readRegister(CC1101_CONFIG::SYNC1));
+        ESP_LOGD(TAG, "SYNC0:               0x%X", readRegister(CC1101_CONFIG::SYNC0));
+        ESP_LOGD(TAG, "PKTLEN:              0x%X", readRegister(CC1101_CONFIG::PKTLEN));
+        ESP_LOGD(TAG, "PKTCTRL1:            0x%X", readRegister(CC1101_CONFIG::PKTCTRL1));
+        ESP_LOGD(TAG, "PKTCTRL0:            0x%X", readRegister(CC1101_CONFIG::PKTCTRL0));
+        ESP_LOGD(TAG, "ADDR:                0x%X", readRegister(CC1101_CONFIG::ADDR));
+        ESP_LOGD(TAG, "CHANNR:              0x%X", readRegister(CC1101_CONFIG::CHANNR));
+        ESP_LOGD(TAG, "FSCTRL1              0x%X", readRegister(CC1101_CONFIG::FSCTRL1));
+        ESP_LOGD(TAG, "FSCTRL0:             0x%X", readRegister(CC1101_CONFIG::FSCTRL0));
+        ESP_LOGD(TAG, "FREQ2:               0x%X", readRegister(CC1101_CONFIG::FREQ2));
+        ESP_LOGD(TAG, "FREQ1:               0x%X", readRegister(CC1101_CONFIG::FREQ1));
+        ESP_LOGD(TAG, "FREQ0:               0x%X", readRegister(CC1101_CONFIG::FREQ0));
+        ESP_LOGD(TAG, "MDMCFG4:             0x%X", readRegister(CC1101_CONFIG::MDMCFG4));
+        ESP_LOGD(TAG, "MDMCFG3:             0x%X", readRegister(CC1101_CONFIG::MDMCFG3));
+        ESP_LOGD(TAG, "MDMCFG2:             0x%X", readRegister(CC1101_CONFIG::MDMCFG2));
+        ESP_LOGD(TAG, "MDMCFG1:             0x%X", readRegister(CC1101_CONFIG::MDMCFG1));
+        ESP_LOGD(TAG, "MDMCFG0:             0x%X", readRegister(CC1101_CONFIG::MDMCFG0));
+        ESP_LOGD(TAG, "DEVIATN:             0x%X", readRegister(CC1101_CONFIG::DEVIATN));
+        ESP_LOGD(TAG, "MCSM2:               0x%X", readRegister(CC1101_CONFIG::MCSM2));
+        ESP_LOGD(TAG, "MCSM1:               0x%X", readRegister(CC1101_CONFIG::MCSM1));
+        ESP_LOGD(TAG, "MCSM0:               0x%X", readRegister(CC1101_CONFIG::MCSM0));
+        ESP_LOGD(TAG, "FOCCFG:              0x%X", readRegister(CC1101_CONFIG::FOCCFG));
+        ESP_LOGD(TAG, "BSCFG:               0x%X", readRegister(CC1101_CONFIG::BSCFG));
+        ESP_LOGD(TAG, "AGCCTRL2:            0x%X", readRegister(CC1101_CONFIG::AGCCTRL2));
+        ESP_LOGD(TAG, "AGCCTRL1:            0x%X", readRegister(CC1101_CONFIG::AGCCTRL1));
+        ESP_LOGD(TAG, "AGCCTRL0:            0x%X", readRegister(CC1101_CONFIG::AGCCTRL0));
+        ESP_LOGD(TAG, "WOREVT1:             0x%X", readRegister(CC1101_CONFIG::WOREVT1));
+        ESP_LOGD(TAG, "WOREVT0:             0x%X", readRegister(CC1101_CONFIG::WOREVT0));
+        ESP_LOGD(TAG, "WORCTRL:             0x%X", readRegister(CC1101_CONFIG::WORCTRL));
+        ESP_LOGD(TAG, "FREND1:              0x%X", readRegister(CC1101_CONFIG::FREND1));
+        ESP_LOGD(TAG, "FREND0:              0x%X", readRegister(CC1101_CONFIG::FREND0));
+        ESP_LOGD(TAG, "FSCAL3:              0x%X", readRegister(CC1101_CONFIG::FSCAL3));
+        ESP_LOGD(TAG, "FSCAL2:              0x%X", readRegister(CC1101_CONFIG::FSCAL2));
+        ESP_LOGD(TAG, "FSCAL1:              0x%X", readRegister(CC1101_CONFIG::FSCAL1));
+        ESP_LOGD(TAG, "FSCAL0:              0x%X", readRegister(CC1101_CONFIG::FSCAL0));
+        ESP_LOGD(TAG, "RCCTRL1:             0x%X", readRegister(CC1101_CONFIG::RCCTRL1));
+        ESP_LOGD(TAG, "RCCTRL0:             0x%X", readRegister(CC1101_CONFIG::RCCTRL0));
+        ESP_LOGD(TAG, "FSTEST:              0x%X", readRegister(CC1101_CONFIG::FSTEST));
+        ESP_LOGD(TAG, "PTEST:               0x%X", readRegister(CC1101_CONFIG::PTEST));
+        ESP_LOGD(TAG, "AGCTEST:             0x%X", readRegister(CC1101_CONFIG::AGCTEST));
+        ESP_LOGD(TAG, "TEST2:               0x%X", readRegister(CC1101_CONFIG::TEST2));
+        ESP_LOGD(TAG, "TEST1:               0x%X", readRegister(CC1101_CONFIG::TEST1));
+        ESP_LOGD(TAG, "TEST0:               0x%X", readRegister(CC1101_CONFIG::TEST0));
+        ESP_LOGD(TAG, "PARTNUM:             0x%X", readRegister(CC1101_CONFIG::PARTNUM));
+        ESP_LOGD(TAG, "VERSION:             0x%X", readRegister(CC1101_CONFIG::VERSION));
+        ESP_LOGD(TAG, "FREQEST:             0x%X", readRegister(CC1101_CONFIG::FREQEST));
+        ESP_LOGD(TAG, "LQI:                 0x%X", readRegister(CC1101_CONFIG::LQI));
+        ESP_LOGD(TAG, "RSSI:                0x%X", readRegister(CC1101_CONFIG::RSSI));
+        ESP_LOGD(TAG, "MARCSTATE:           0x%X", readRegister(CC1101_CONFIG::MARCSTATE));
+        ESP_LOGD(TAG, "WORTIME1:            0x%X", readRegister(CC1101_CONFIG::WORTIME1));
+        ESP_LOGD(TAG, "WORTIME0:            0x%X", readRegister(CC1101_CONFIG::WORTIME0));
+        ESP_LOGD(TAG, "PKTSTATUS:           0x%X", readRegister(CC1101_CONFIG::PKTSTATUS));
+        ESP_LOGD(TAG, "VCO_VC_DAC:          0x%X", readRegister(CC1101_CONFIG::VCO_VC_DAC));
+        ESP_LOGD(TAG, "TXBYTES:             0x%X", readRegister(CC1101_CONFIG::TXBYTES));
+        ESP_LOGD(TAG, "RXBYTES:             0x%X", readRegister(CC1101_CONFIG::RXBYTES));
+        byte patables[8];
+        readBurstRegister(CC1101_CONFIG::PATABLE, patables, 8);
+        ESP_LOGD(TAG, "PA_TABLE0:           0x%X", patables[0]);
+        ESP_LOGD(TAG, "PA_TABLE1:           0x%X", patables[1]);
+        ESP_LOGD(TAG, "PA_TABLE2:           0x%X", patables[2]);
+        ESP_LOGD(TAG, "PA_TABLE3:           0x%X", patables[3]);
+        ESP_LOGD(TAG, "PA_TABLE4:           0x%X", patables[4]);
+        ESP_LOGD(TAG, "PA_TABLE5:           0x%X", patables[5]);
+        ESP_LOGD(TAG, "PA_TABLE6:           0x%X", patables[6]);
+        ESP_LOGD(TAG, "PA_TABLE7:           0x%X", patables[7]);
+#endif
+    }
+
     bool CC1101Device::lowerChipSelect()
     {
         return digitalWrite(m_spiMaster->ChipSelectPin(), 0);
@@ -995,7 +1073,10 @@ namespace TI_CC1101
             SetModemDeviation(m_deviceConfig.FrequencyDeviationKhz);
         }
 
+        SetOutputPower(m_deviceConfig.TxPower);
+
         // Set MDMCFG2,FREND0
+        setMDMCFG2();
 
         SetCRCAutoFlush(m_deviceConfig.EnableCRCAutoflush);
         SetAddressCheck(m_deviceConfig.AddressCheck);
@@ -1011,7 +1092,7 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::MDMCFG0, 0xF8);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::MDMCFG1, 0x00);
+        returnValue = writeRegister(CC1101_CONFIG::MDMCFG1, 0x0);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::CHANNR, 0);
         handleCommonStatusCodes(returnValue, false);

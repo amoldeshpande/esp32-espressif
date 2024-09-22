@@ -41,7 +41,7 @@ namespace TI_CC1101
         bool                      EnableCRCAutoflush{false};
         SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync};
         AddressCheckConfiguration AddressCheck{AddressCheckConfiguration::None};
-        bool                      EnableAppendStatusBytes{true};
+        bool                      EnableAppendStatusBytes{false};
 
         QueueHandle_t InterruptQueue;
 
@@ -98,6 +98,8 @@ namespace TI_CC1101
         void SetCRCAutoFlush(bool shouldEnable);
         void SetAddressCheck(AddressCheckConfiguration addressCheckConfig);
         void SetAppendStatus(bool shouldEnable);
+
+        void DumpRegisters();
 
       protected:
         bool               lowerChipSelect();
