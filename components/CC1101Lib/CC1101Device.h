@@ -39,7 +39,7 @@ namespace TI_CC1101
         bool                      DisableDCFilter{true};
         bool                      EnableCRC{false};
         bool                      EnableCRCAutoflush{false};
-        SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync};
+        SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
         AddressCheckConfiguration AddressCheck{AddressCheckConfiguration::None};
         bool                      EnableAppendStatusBytes{false};
 

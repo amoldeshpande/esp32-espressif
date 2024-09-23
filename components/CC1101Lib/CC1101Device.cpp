@@ -137,7 +137,7 @@ namespace TI_CC1101
         gpioConfig.intr_type    = GPIO_INTR_NEGEDGE;
         gpioConfig.pin_bit_mask = 1 << m_deviceConfig.RxPin;
         gpioConfig.mode         = GPIO_MODE_INPUT;
-        gpioConfig.pull_up_en   = GPIO_PULLUP_ENABLE;
+        gpioConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
         gpioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
 
         ESP_LOGD(TAG, "%s gpioconfig pin mask is 0x%0X", __FUNCTION__, (int)gpioConfig.pin_bit_mask);
