@@ -72,9 +72,6 @@ namespace TI_CC1101
         const byte kPartNumber  = 0x0;
         const byte kChipVersion = 0x14;
 
-        // State variables
-        bool m_dataReceived = false;
-
         QueueHandle_t m_ISRQueueHandle;
 
       public:

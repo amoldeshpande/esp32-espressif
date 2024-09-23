@@ -75,7 +75,7 @@ namespace TI_CC1101
 
         delayMilliseconds(1);
 
-        DumpRegisters();
+        //DumpRegisters();
 
         byte partNumber  = readRegister(CC1101_CONFIG::PARTNUM);
         byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
@@ -120,8 +120,7 @@ namespace TI_CC1101
         CBRA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES, statusCode));
 
         waitForMisoLow();
-
-        CBRA(lowerChipSelect());
+        raiseChipSelect();
 
     Error:
         if (!bRet)
@@ -134,7 +133,7 @@ namespace TI_CC1101
         bool          bRet    = true;
         gpio_config_t gpioConfig;
 
-        gpioConfig.intr_type    = GPIO_INTR_NEGEDGE;
+        gpioConfig.intr_type    = GPIO_INTR_POSEDGE;
         gpioConfig.pin_bit_mask = 1 << m_deviceConfig.RxPin;
         gpioConfig.mode         = GPIO_MODE_INPUT;
         gpioConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
@@ -150,6 +149,7 @@ namespace TI_CC1101
         // Turn on the radio for receive
         enableReceiveMode();
 
+        //esp_intr_dump(NULL);
     Error:
         if (!bRet)
         {
@@ -162,9 +162,9 @@ namespace TI_CC1101
         uint32_t ignore = 0;
         if (xQueueReceive(m_ISRQueueHandle, &ignore, pdTICKS_TO_MS(100)) == pdTRUE)
         {
-            ESP_LOGD(TAG, "interrupt received gpio level %d", 0);//gpio_get_level(m_deviceConfig.RxPin));
+            ESP_LOGD(TAG, "interrupt received ");
+            //gpio level % d ", 0);//gpio_get_level(m_deviceConfig.RxPin));
         }
-//        esp_intr_dump(NULL);
     }
     // Page 75 of TI Datasheet
     // Frequency is a 24-bit word set via FREQ0,FREQ1 and FREQ2 registers
