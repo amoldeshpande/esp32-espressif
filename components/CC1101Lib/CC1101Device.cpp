@@ -75,7 +75,7 @@ namespace TI_CC1101
 
         delayMilliseconds(1);
 
-        //DumpRegisters();
+        DumpRegisters();
 
         byte partNumber  = readRegister(CC1101_CONFIG::PARTNUM);
         byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
@@ -798,6 +798,7 @@ namespace TI_CC1101
 
             outData = sendStrobe(CC1101_CONFIG::SRX);
             ESP_LOGD(TAG, "SRX strobe returned status 0x%0X", outData);
+            handleCommonStatusCodes(outData, true);
 
             chipState = outData & 0b01110000; // check chip state (pg 31)
             if (chipState != 0)
@@ -1035,9 +1036,9 @@ namespace TI_CC1101
         {
             case PacketFormat::Normal:
                 handleCommonStatusCodes(statusCode, false);
-                statusCode = writeRegister(CC1101_CONFIG::IOCFG0, (byte)ConfigValues::GDx_CFG_LowerSixBits::SYNC_WORD_OR_RX_PKT_DISCARDED_OR_TX_UNDERFLOW);
+                statusCode = writeRegister(CC1101_CONFIG::IOCFG0, (byte)ConfigValues::GDx_CFG_LowerSixBits::RX_FIFO_ABOVE_THRESHOLD);
                 handleCommonStatusCodes(statusCode, false);
-                statusCode = writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::HIGH_IMPEDANCE_3_STATE);
+                statusCode = writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::CHIP_RDY_N);
                 handleCommonStatusCodes(statusCode, false);
                 ESP_LOGD(TAG, "%s: Writing PKTCTRL0 0x%X for Packet format %d", __FUNCTION__, pktctrlVal, (int)m_deviceConfig.PacketFmt);
                 statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);

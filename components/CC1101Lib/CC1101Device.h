@@ -34,7 +34,7 @@ namespace TI_CC1101
         int                       TxPower{10}; // Also called Output Power in the datasheet
         ModulationType            Modulation{ModulationType::ASK_OOK};
         bool                      ManchesterEnabled{true};
-        PacketFormat              PacketFmt{PacketFormat::AsyncSerialMode};      // this field and PacketlengthCfg go into the PKTCTRL0 register, pg 74
+        PacketFormat              PacketFmt{PacketFormat::Normal};      // this field and PacketlengthCfg go into the PKTCTRL0 register, pg 74
         PacketLengthConfig        PacketLengthCfg{PacketLengthConfig::Infinite}; // Currently, there are some harcoded side-effects in configure(). TODO figure out why
         bool                      DisableDCFilter{true};
         bool                      EnableCRC{false};
