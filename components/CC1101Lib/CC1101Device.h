@@ -13,15 +13,21 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma once
+#ifndef ARDUINO
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
+#endif
 #include <vector>
 #include <memory>
 #include "CC1101Lib.h"
 
+
 namespace TI_CC1101
 {
     class SpiMaster;
+#ifdef ARDUINO
+    typedef void* QueueHandle_t;
+#endif
 
     struct CC110DeviceConfig
     {
@@ -73,6 +79,9 @@ namespace TI_CC1101
         const byte kChipVersion = 0x14;
 
         QueueHandle_t m_ISRQueueHandle;
+        volatile bool m_dataReceived = true;
+
+        static CC1101Device* snm_thisPtr;
 
       public:
         CC1101Device();
@@ -99,11 +108,18 @@ namespace TI_CC1101
         void DumpRegisters();
 
       protected:
-        bool               lowerChipSelect();
-        bool               raiseChipSelect();
+        void               lowerChipSelect();
+        void               raiseChipSelect();
         void               waitForMisoLow();
         void               enableReceiveMode();
-        bool               digitalWrite(int pin, uint32_t value);
+#ifndef ARDUINO
+        bool               digitalWrite(gpio_num_t pin, uint32_t value);
+        esp_err_t          do_gpio_set_level(gpio_num_t pin, int level) {return gpio_set_level(pin,level);}
+        int                do_gpio_get_level(gpio_num_t pin) {return gpio_get_level(pin);}
+#else
+        int                do_gpio_set_level(int pin, int level) {digitalWrite(pin,level); return 0;}
+        int                do_gpio_get_level(int pin) {return digitalRead(pin);}
+#endif
         void               delayMilliseconds(int millis);
         [[nodiscard]] byte readRegister(byte address);
         bool               readBurstRegister(byte address, byte *buffer, int len);
@@ -121,6 +137,10 @@ namespace TI_CC1101
 
         void setMDMCFG2();
 
+#ifndef ARDUINO
         static void IRAM_ATTR gpioISR(void *);
+#else
+        static void IRAM_ATTR gpioISR();
+#endif
     };
 } // namespace TI_CC1101

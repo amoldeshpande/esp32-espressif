@@ -14,10 +14,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #pragma once
+#include "LocalTypes.h"
+#ifdef ARDUINO
+#include <stddef.h>
+#else
 #include <memory.h>
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
-#include "LocalTypes.h"
+#endif
 
 namespace TI_CC1101
 {
@@ -32,9 +36,12 @@ namespace TI_CC1101
   };
   enum class Esp32SPIHost
   {
-    HSPI = 0,
-    VSPI = 1
+    HOST_HSPI = 0,
+    HOST_VSPI = 1
   };
+  #ifdef ARDUINO
+  typedef void* spi_device_handle_t;
+  #endif
   struct SpiConfig
   {
     gpio_num_t misoPin;
@@ -68,10 +75,22 @@ namespace TI_CC1101
 
       bool WriteByte(byte toWrite,byte& outData);
       bool WriteByteToAddress(byte address, byte value, byte&  outData);
-      bool WriteBytes(byte *toWrite, size_t arrayLen, byte&  outData);
+      bool WriteBytesToAddress(byte address,byte *toWrite, size_t arrayLen, byte&  outData);
+      bool ReadBurstRegister(byte address,byte *toRead, size_t arrayLen);
+      bool ReadRegister(byte addr, byte& outData);
+      void lowerChipSelect();
+      void raiseChipSelect();
+      void waitForMisoLow();
 
     protected:
+#ifndef ARDUINO
       inline void intializeDefaultTransaction(spi_transaction_t &transToInitialize) { memset(&transToInitialize, 0, sizeof(transToInitialize)); }
+      inline void startTransaction(){}
+      inline void endTransaction(){}
+#else  
+      void startTransaction();
+      void endTransaction();
+    #endif
   };
 
 }//namespace

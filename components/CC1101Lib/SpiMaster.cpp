@@ -27,7 +27,7 @@ SpiMaster::SpiMaster()
 SpiMaster::~SpiMaster()
 {
     spi_bus_remove_device(m_DeviceHandle);
-    spi_bus_free(m_config.spiHost == Esp32SPIHost::HSPI ? HSPI_HOST : VSPI_HOST);
+    spi_bus_free(m_config.spiHost == Esp32SPIHost::HOST_HSPI ? HSPI_HOST : VSPI_HOST);
 }
 
 bool SpiMaster::Init(const SpiConfig &cfg)
@@ -73,7 +73,7 @@ bool SpiMaster::Init(const SpiConfig &cfg)
     gpio_set_direction(cfg.chipSelectPin, GPIO_MODE_OUTPUT);
     gpio_set_level(cfg.chipSelectPin, 1);
 
-    spi_host_device_t host_id = (cfg.spiHost == Esp32SPIHost::HSPI ? HSPI_HOST : VSPI_HOST);
+    spi_host_device_t host_id = (cfg.spiHost == Esp32SPIHost::HOST_HSPI ? HSPI_HOST : VSPI_HOST);
     ret = spi_bus_initialize(host_id,  &busConfig,kDmaChannelToUse);
 
     ESP_LOGI(TAG, "spi_bus_initialize() returned %d", ret);
@@ -133,25 +133,79 @@ Error:
     }
     return bRet;
 }
-
-bool SpiMaster::WriteBytes(byte *toWrite, size_t arrayLen, byte& outData)
+bool SpiMaster::WriteBytesToAddress(byte address,byte *toWrite, size_t arrayLen, byte& outData)
 {
     bool              bRet = true;
     esp_err_t         retCode;
     spi_transaction_t transaction;
 
     intializeDefaultTransaction(transaction);
-    transaction.length    = arrayLen * 8;
-    transaction.tx_buffer = toWrite;
+    transaction.flags      = SPI_TRANS_USE_TXDATA;
+    transaction.length  = 1;
+    transaction.tx_data[0] = address;
     transaction.rx_buffer = &outData;
     retCode = spi_device_transmit(m_DeviceHandle, &transaction);
     CERA(retCode);
+
+    intializeDefaultTransaction(transaction);
+    transaction.tx_buffer = toWrite;
+    transaction.length  = arrayLen;
+    transaction.rx_buffer = &outData;
+    retCode = spi_device_transmit(m_DeviceHandle, &transaction);
+    CERA(retCode);
+
 Error:
     if (!bRet)
     {
-        ESP_LOGE(TAG, "%s failed, spi_device_transmit returned -> 0x%X", __PRETTY_FUNCTION__,retCode);
+        ESP_LOGE(TAG, "%s failed, spi_device_transmit returned ->  0x%X", __PRETTY_FUNCTION__,retCode);
     }
+
     return bRet;
 }
+bool SpiMaster::ReadBurstRegister(byte address, byte *toRead, size_t arrayLen)
+{
+    bool bRet = true;
+    byte statusCode;
 
-}//namespace
+    lowerChipSelect();
+    waitForMisoLow();
+    CBRA(WriteByte(address, statusCode));
+    for (size_t si = 0; si < arrayLen; si++)
+    {
+        CBRA(WriteByte(0, statusCode));
+        toRead[si] = statusCode;
+    }
+    raiseChipSelect();
+Error:
+    return bRet;
+}
+bool SpiMaster::ReadRegister(byte address, byte& outData)
+{
+    byte ignore = 0;
+    bool bRet   = true;
+
+    lowerChipSelect();
+    waitForMisoLow();
+    CBRA(WriteByte(address, ignore));
+    CBRA(WriteByte(0, outData));
+    raiseChipSelect();
+
+Error:
+    return bRet;
+}
+void SpiMaster::lowerChipSelect()
+{
+    gpio_set_level(m_config.chipSelectPin, 0);
+}
+
+void SpiMaster::raiseChipSelect()
+{
+    gpio_set_level(m_config.chipSelectPin, 1);
+}
+void SpiMaster::waitForMisoLow()
+{
+    while (gpio_get_level(m_config.misoPin))
+        delayMicroseconds(1);
+}
+
+} // namespace TI_CC1101

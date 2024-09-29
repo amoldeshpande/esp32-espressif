@@ -14,16 +14,21 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <cmath>
+#ifndef ARDUINO
 #include <driver/rtc_io.h>
 #include <format>
+#endif
 #include "CC1101Device.h"
 #include "CC1101Lib.h"
 #include "SpiMaster.h"
 
-static const char *TAG = "CC110Device";
+static const char *TAG = "CC1101Device";
+
 
 namespace TI_CC1101
 {
+    CC1101Device *CC1101Device::snm_thisPtr;
+
     void CC110DeviceConfig::DebugDump()
     {
 #if _DEBUG
@@ -31,10 +36,10 @@ namespace TI_CC1101
 
         ESP_LOGD(TAG, "\tTXPin = %d", TxPin);
         ESP_LOGD(TAG, "\tRXPin = %d", RxPin);
-        ESP_LOGD(TAG, "\tOscillatorFrequencyMHz = %g", OscillatorFrequencyMHz);
-        ESP_LOGD(TAG, "\tCarrierFrequencyMHz = %g", CarrierFrequencyMHz);
-        ESP_LOGD(TAG, "\tReceiveFilterBandwidthKHz = %g", ReceiveFilterBandwidthKHz);
-        ESP_LOGD(TAG, "\tFrequencyDeviationKhz = %g", FrequencyDeviationKhz);
+        ESP_LOGD(TAG, "\tOscillatorFrequencyMHz = " FLOAT_FMT , OscillatorFrequencyMHz);
+        ESP_LOGD(TAG, "\tCarrierFrequencyMHz = " FLOAT_FMT, CarrierFrequencyMHz);
+        ESP_LOGD(TAG, "\tReceiveFilterBandwidthKHz = " FLOAT_FMT, ReceiveFilterBandwidthKHz);
+        ESP_LOGD(TAG, "\tFrequencyDeviationKhz = " FLOAT_FMT, FrequencyDeviationKhz);
         ESP_LOGD(TAG, "\tTxPower = %d ", TxPower);
         ESP_LOGD(TAG, "\tModulationType = %d", (int)Modulation);
         ESP_LOGD(TAG, "\tManchesterEnabled = %s", ManchesterEnabled ? "true" : "false");
@@ -80,8 +85,10 @@ namespace TI_CC1101
         byte partNumber  = readRegister(CC1101_CONFIG::PARTNUM);
         byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
 
-        ESP_LOGI(TAG, "Part Number 0x%0X and chip version 0x%0X", partNumber, chipVersion);
+        ESP_LOGI(TAG, "Part Number " HEX_FMT " and chip version " HEX_FMT, partNumber, chipVersion);
         CBRA((partNumber == kPartNumber) && (chipVersion == kChipVersion));
+
+        snm_thisPtr = this;
 
     Error:
         return bRet;
@@ -101,16 +108,17 @@ namespace TI_CC1101
         bool bRet       = true;
         byte statusCode = 0;
 
-        CERA(gpio_set_level(m_spiMaster->ClockPin(), 1));
-        CERA(gpio_set_level(m_spiMaster->MosiPin(), 0));
+        CERA(do_gpio_set_level(m_spiMaster->ClockPin(), 1));
+        CERA(do_gpio_set_level(m_spiMaster->MosiPin(), 0));
 
-        CBRA(lowerChipSelect());
-        delayMilliseconds(1);
-        CBRA(raiseChipSelect());
-        delayMilliseconds(1);
-        CBRA(lowerChipSelect());
-        delayMilliseconds(1);
-        CBRA(raiseChipSelect());
+        // This is specific to the CC1101, so it does not go into SpiMaster
+        lowerChipSelect();
+        delayMicroseconds(1);
+        raiseChipSelect();
+        delayMicroseconds(41);
+        lowerChipSelect();
+        delayMicroseconds(1);
+        raiseChipSelect();
 
         waitForMisoLow();
 
@@ -131,6 +139,7 @@ namespace TI_CC1101
     bool CC1101Device::BeginReceive()
     {
         bool          bRet    = true;
+#ifndef ARDUINO
         gpio_config_t gpioConfig;
 
         gpioConfig.intr_type    = GPIO_INTR_POSEDGE;
@@ -139,13 +148,18 @@ namespace TI_CC1101
         gpioConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
         gpioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
 
-        ESP_LOGD(TAG, "%s gpioconfig pin mask is 0x%0X", __FUNCTION__, (int)gpioConfig.pin_bit_mask);
+        ESP_LOGD(TAG, "%s gpioconfig pin mask is " HEX_FMT, __FUNCTION__, (int)gpioConfig.pin_bit_mask);
         CERA(gpio_config(&gpioConfig));
 
         CERA(gpio_install_isr_service(0));
 
         CERA(gpio_isr_handler_add(m_deviceConfig.RxPin, gpioISR, this));
 
+#else // ARDUINO
+        pinMode(m_deviceConfig.RxPin,INPUT);
+        attachInterrupt(digitalPinToInterrupt(m_deviceConfig.RxPin),gpioISR,CHANGE);
+
+#endif
         // Turn on the radio for receive
         enableReceiveMode();
 
@@ -160,11 +174,19 @@ namespace TI_CC1101
     void CC1101Device::Update()
     {
         uint32_t ignore = 0;
+#ifndef ARDUINO
         if (xQueueReceive(m_ISRQueueHandle, &ignore, pdTICKS_TO_MS(100)) == pdTRUE)
         {
             ESP_LOGD(TAG, "interrupt received ");
             //gpio level % d ", 0);//gpio_get_level(m_deviceConfig.RxPin));
         }
+#else
+        if(m_dataReceived)
+        {
+          Serial.printf("data recvd");
+          m_dataReceived = false;
+        }
+#endif
     }
     // Page 75 of TI Datasheet
     // Frequency is a 24-bit word set via FREQ0,FREQ1 and FREQ2 registers
@@ -195,7 +217,7 @@ namespace TI_CC1101
         byte freq1 = (byte)((frequencySteps & 0x0000FF00) >> 8);
         byte freq2 = (byte)((frequencySteps & 0x003F0000) >> 16);
 
-        ESP_LOGD(TAG, "SetFrequency() -> freq0=0x%0X, freq1=0x%0X, freq2 = 0x%0X, increment= %g, result = %g, expected %g MHz", freq0, freq1, freq2, frequencyIncrement,
+        ESP_LOGD(TAG, "SetFrequency() -> freq0=" HEX_FMT ", freq1=" HEX_FMT ", freq2 = " HEX_FMT ", increment= " FLOAT_FMT ", result = " FLOAT_FMT ", expected" FLOAT_FMT " MHz", freq0, freq1, freq2, frequencyIncrement,
                  frequencyIncrement * (float)(((int)freq2 << 16) | ((int)freq1 << 8) | (int)freq0), frequencyMHz);
 
         statusCode = writeRegister(CC1101_CONFIG::FREQ0, freq0);
@@ -206,7 +228,7 @@ namespace TI_CC1101
         handleCommonStatusCodes(statusCode, false);
 
         m_carrierFrequencyMHz = frequencyMHz;
-        ESP_LOGI(TAG, "m_carrierFrequencyMHz is now %g", m_carrierFrequencyMHz);
+        ESP_LOGI(TAG, "m_carrierFrequencyMHz is now " FLOAT_FMT, m_carrierFrequencyMHz);
     }
     // Page 76 of TI Datasheet
     //
@@ -226,7 +248,7 @@ namespace TI_CC1101
         byte modemCFG   = readRegister(CC1101_CONFIG::MDMCFG4);
         byte DataRate   = (byte)(modemCFG & 0x0F);
 
-        ESP_LOGD(TAG, "%s: mdmcfg4 = 0x%0X", __FUNCTION__, modemCFG);
+        ESP_LOGD(TAG, "%s: mdmcfg4 = " HEX_FMT , __FUNCTION__, modemCFG);
 
         // Page 35 table in an array. The exponent is the horizontal stride (4 columns corresponding to the bit values 00,01,10,11)
         // Mantissa is the vertical stride (4 rows corresponding to the bit values 00,01,10,11)
@@ -271,7 +293,7 @@ namespace TI_CC1101
         }
         byte result = (byte)(((Exponent << 2 | Mantissa) << 4) | DataRate);
 
-        ESP_LOGI(TAG, "%s:  input bw %g, datarate 0x%0X setting result=0x%0X, Mantissa=0x%0X,Exponent=0x%0X", __FUNCTION__, bandwidthKHz, DataRate, result, Mantissa, Exponent);
+        ESP_LOGI(TAG, "%s:  input bw " FLOAT_FMT ", datarate " HEX_FMT " setting result=" HEX_FMT ", Mantissa=" HEX_FMT ",Exponent=" HEX_FMT , __FUNCTION__, bandwidthKHz, DataRate, result, Mantissa, Exponent);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG4, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -285,12 +307,12 @@ namespace TI_CC1101
 
         byte result = ((modem4CFG & ~0x0F) | Exponent);
 
-        ESP_LOGD(TAG, "%s: DataRate expected -> %g ", __FUNCTION__, (float)(256 + Mantissa) * (1 << Exponent) / (float)(1 << 28) * m_oscillatorFrequencyHz);
+        ESP_LOGD(TAG, "%s: DataRate expected -> " FLOAT_FMT, __FUNCTION__, (float)(256 + Mantissa) * (1 << Exponent) / (float)(1 << 28) * m_oscillatorFrequencyHz);
 
-        ESP_LOGD(TAG, "%s: Writing to MDMCFG4 -> 0x%0X", __FUNCTION__, result);
+        ESP_LOGD(TAG, "%s: Writing to MDMCFG4 -> " HEX_FMT, __FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG4, result);
         handleCommonStatusCodes(statusCode, false);
-        ESP_LOGD(TAG, "%s: Writing to MDMCFG3 -> 0x%0X", __FUNCTION__, Mantissa);
+        ESP_LOGD(TAG, "%s: Writing to MDMCFG3 -> " HEX_FMT, __FUNCTION__, Mantissa);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG3, Mantissa);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -404,7 +426,7 @@ namespace TI_CC1101
             }
         }
         byte result = (byte)(Exponent << 4 | Mantissa);
-        ESP_LOGD(TAG, "%s: setting result=0x%0X, Mantissa=0x%0X,Exponent=0x%0X", __FUNCTION__, result, Mantissa, Exponent);
+        ESP_LOGD(TAG, "%s: setting result=" HEX_FMT ", Mantissa=" HEX_FMT ",Exponent=" HEX_FMT , __FUNCTION__, result, Mantissa, Exponent);
         statusCode = writeRegister(CC1101_CONFIG::DEVIATN, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -425,14 +447,14 @@ namespace TI_CC1101
             currentTable     = ConfigValues::PATABLE_315_SETTINGS;
             paSetting        = getMultiLayerInductorPower(outputPower, currentTable, ARRAYSIZE(ConfigValues::PATABLE_315_SETTINGS));
             m_currentPATable = PATables::PA_315;
-            ESP_LOGD(TAG, "%s: patable is 315 for freq %g, setting is 0x%X", __FUNCTION__, m_carrierFrequencyMHz, paSetting);
+            ESP_LOGD(TAG, "%s: patable is 315 for freq " FLOAT_FMT "; setting is " HEX_FMT, __FUNCTION__, m_carrierFrequencyMHz, paSetting);
         }
         else if (m_carrierFrequencyMHz <= 464)
         {
             currentTable     = ConfigValues::PATABLE_433_SETTINGS;
             paSetting        = getMultiLayerInductorPower(outputPower, currentTable, ARRAYSIZE(ConfigValues::PATABLE_433_SETTINGS));
             m_currentPATable = PATables::PA_433;
-            ESP_LOGD(TAG, "%s: patable is 433 for freq %g, setting is 0x%X", __FUNCTION__, m_carrierFrequencyMHz, paSetting);
+            ESP_LOGD(TAG, "%s: patable is 433 for freq " FLOAT_FMT "; setting is " HEX_FMT, __FUNCTION__, m_carrierFrequencyMHz, paSetting);
         }
         // I'm not sure what to do about 868, so this is all a bit adhoc over 464 MHz. I suppose it depends on your
         // chip.
@@ -441,14 +463,14 @@ namespace TI_CC1101
             currentTable     = ConfigValues::PATABLE_868_SETTINGS;
             paSetting        = getWireWoundInductorPower(outputPower, currentTable, ARRAYSIZE(ConfigValues::PATABLE_868_SETTINGS));
             m_currentPATable = PATables::PA_868;
-            ESP_LOGD(TAG, "%s: patable is 868 for freq %g, setting is 0x%X", __FUNCTION__, m_carrierFrequencyMHz, paSetting);
+            ESP_LOGD(TAG, "%s: patable is 868 for freq " FLOAT_FMT "; setting is " HEX_FMT, __FUNCTION__, m_carrierFrequencyMHz, paSetting);
         }
         else
         {
             currentTable     = ConfigValues::PATABLE_915_SETTINGS;
             paSetting        = getWireWoundInductorPower(outputPower, currentTable, ARRAYSIZE(ConfigValues::PATABLE_915_SETTINGS));
             m_currentPATable = PATables::PA_915;
-            ESP_LOGD(TAG, "%s: patable is 915 for freq %g, setting is 0x%X", __FUNCTION__, m_carrierFrequencyMHz, paSetting);
+            ESP_LOGD(TAG, "%s: patable is 915 for freq " FLOAT_FMT "; setting is " HEX_FMT, __FUNCTION__, m_carrierFrequencyMHz, paSetting);
         }
 
         // ASK always uses index 0 PATABLE to transmit a 0;
@@ -456,13 +478,13 @@ namespace TI_CC1101
         {
             m_PATABLE[0] = 0;
             m_PATABLE[1] = paSetting;
-            ESP_LOGD(TAG, "Modulation is ASK_OOK, patable should have 0x%0X in index 1", paSetting);
+            ESP_LOGD(TAG, "Modulation is ASK_OOK, patable should have " HEX_FMT " in index 1", paSetting);
         }
         else
         {
             m_PATABLE[0] = paSetting;
             m_PATABLE[1] = 0;
-            ESP_LOGD(TAG, "Modulation is *not* ASK_OOK, patable should have 0x%0X in index 0", paSetting);
+            ESP_LOGD(TAG, "Modulation is *not* ASK_OOK, patable should have " HEX_FMT " in index 0", paSetting);
         }
 #if _DEBUG
         {
@@ -471,7 +493,11 @@ namespace TI_CC1101
             std::string patableFmtStr;
             for (int i = 0; i < 8; i++)
             {
+#ifndef ARDUINO
                 patableFmtStr.append(std::format(" {:x} ", patables[i]));
+#else
+                Serial.printf("[%d] " HEX_FMT ,i,patables[i]);
+#endif
             }
             ESP_LOGD(TAG, "PATABLE before: %s", patableFmtStr.c_str());
         }
@@ -486,7 +512,11 @@ namespace TI_CC1101
             std::string patableFmtStr;
             for (int i = 0; i < 8; i++)
             {
+#ifndef ARDUINO
                 patableFmtStr.append(std::format(" {:x} ", patables[i]));
+#else
+                Serial.printf("[%d] " HEX_FMT,i, patables[i]);
+#endif
             }
             ESP_LOGD(TAG, "PATABLE after: %s", patableFmtStr.c_str());
         }
@@ -536,11 +566,11 @@ namespace TI_CC1101
                 break;
         }
 
-        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X", __FUNCTION__, mdmcfg2);
+        ESP_LOGD(TAG, "%s Setting MDMCFG2 " HEX_FMT, __FUNCTION__, mdmcfg2);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, mdmcfg2);
         handleCommonStatusCodes(statusCode, false);
 
-        ESP_LOGD(TAG, "%s Setting FREND0 0x%0X", __FUNCTION__, frend0);
+        ESP_LOGD(TAG, "%s Setting FREND0 " HEX_FMT, __FUNCTION__, frend0);
         statusCode = writeRegister(CC1101_CONFIG::FREND0, frend0);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -563,7 +593,7 @@ namespace TI_CC1101
             result &= 0b11110111;
         }
 
-        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X", __FUNCTION__, result);
+        ESP_LOGD(TAG, "%s Setting MDMCFG2 " HEX_FMT, __FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -579,7 +609,7 @@ namespace TI_CC1101
 
         byte setting = (shouldDisable ? 0b10000000 : 0b00000000);
 
-        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X", __FUNCTION__, (byte)(currentMdmcfg2 | setting));
+        ESP_LOGD(TAG, "%s Setting MDMCFG2 " HEX_FMT, __FUNCTION__, (byte)(currentMdmcfg2 | setting));
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, (byte)(currentMdmcfg2 | setting));
         handleCommonStatusCodes(statusCode, false);
     }
@@ -600,7 +630,7 @@ namespace TI_CC1101
         byte currentMdmcfg2 = readRegister(CC1101_CONFIG::MDMCFG2);
         byte result         = (byte)((currentMdmcfg2 & 0b11111000) | (int)syncMode);
 
-        ESP_LOGD(TAG, "%s Setting MDMCFG2 0x%0X", __FUNCTION__, result);
+        ESP_LOGD(TAG, "%s Setting MDMCFG2 " HEX_FMT, __FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG2, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -628,7 +658,7 @@ namespace TI_CC1101
                 result |= 0b00110000;
                 break;
         }
-        ESP_LOGD(TAG, "%s Setting PKTCTRL0 0x%0X", __FUNCTION__, result);
+        ESP_LOGD(TAG, "%s Setting PKTCTRL0 " HEX_FMT, __FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -646,7 +676,7 @@ namespace TI_CC1101
         {
             result |= 0b00000100;
         }
-        ESP_LOGD(TAG, "%s Setting PKTCTRL0 0x%0X", __FUNCTION__, result);
+        ESP_LOGD(TAG, "%s Setting PKTCTRL0 " HEX_FMT, __FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -665,7 +695,7 @@ namespace TI_CC1101
         {
             currentPktCtrl1 |= 0b00001000;
         }
-        ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X", __FUNCTION__, currentPktCtrl1);
+        ESP_LOGD(TAG, "%s Setting PKTCTRL1" HEX_FMT, __FUNCTION__, currentPktCtrl1);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, currentPktCtrl1);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -679,7 +709,7 @@ namespace TI_CC1101
         byte currentPktCtrl1 = readRegister(CC1101_CONFIG::PKTCTRL1);
         currentPktCtrl1      = (byte)((currentPktCtrl1 & 0b11111100) | (int)addressCheckConfig);
 
-        ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X", __FUNCTION__, currentPktCtrl1);
+        ESP_LOGD(TAG, "%s Setting PKTCTRL1 " HEX_FMT, __FUNCTION__, currentPktCtrl1);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, currentPktCtrl1);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -692,7 +722,7 @@ namespace TI_CC1101
         byte currentPktCtrl1 = readRegister(CC1101_CONFIG::PKTCTRL1);
         byte result          = (byte)((currentPktCtrl1 & 0b11111011) | (shouldEnable ? 0b100 : 0b000));
 
-        ESP_LOGD(TAG, "%s Setting PKTCTRL1 0x%0X", __FUNCTION__, result);
+        ESP_LOGD(TAG, "%s Setting PKTCTRL1 " HEX_FMT, __FUNCTION__, result);
         statusCode = writeRegister(CC1101_CONFIG::PKTCTRL1, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -701,94 +731,92 @@ namespace TI_CC1101
     void CC1101Device::DumpRegisters()
     {
 #if _DEBUG
-        ESP_LOGD(TAG, "IOCFG2:              0x%X", readRegister(CC1101_CONFIG::IOCFG2));
-        ESP_LOGD(TAG, "IOCFG1:              0x%X", readRegister(CC1101_CONFIG::IOCFG1));
-        ESP_LOGD(TAG, "IOCFG0:              0x%X", readRegister(CC1101_CONFIG::IOCFG0));
-        ESP_LOGD(TAG, "FIFOTHR:             0x%X", readRegister(CC1101_CONFIG::FIFOTHR));
-        ESP_LOGD(TAG, "SYNC1:               0x%X", readRegister(CC1101_CONFIG::SYNC1));
-        ESP_LOGD(TAG, "SYNC0:               0x%X", readRegister(CC1101_CONFIG::SYNC0));
-        ESP_LOGD(TAG, "PKTLEN:              0x%X", readRegister(CC1101_CONFIG::PKTLEN));
-        ESP_LOGD(TAG, "PKTCTRL1:            0x%X", readRegister(CC1101_CONFIG::PKTCTRL1));
-        ESP_LOGD(TAG, "PKTCTRL0:            0x%X", readRegister(CC1101_CONFIG::PKTCTRL0));
-        ESP_LOGD(TAG, "ADDR:                0x%X", readRegister(CC1101_CONFIG::ADDR));
-        ESP_LOGD(TAG, "CHANNR:              0x%X", readRegister(CC1101_CONFIG::CHANNR));
-        ESP_LOGD(TAG, "FSCTRL1              0x%X", readRegister(CC1101_CONFIG::FSCTRL1));
-        ESP_LOGD(TAG, "FSCTRL0:             0x%X", readRegister(CC1101_CONFIG::FSCTRL0));
-        ESP_LOGD(TAG, "FREQ2:               0x%X", readRegister(CC1101_CONFIG::FREQ2));
-        ESP_LOGD(TAG, "FREQ1:               0x%X", readRegister(CC1101_CONFIG::FREQ1));
-        ESP_LOGD(TAG, "FREQ0:               0x%X", readRegister(CC1101_CONFIG::FREQ0));
-        ESP_LOGD(TAG, "MDMCFG4:             0x%X", readRegister(CC1101_CONFIG::MDMCFG4));
-        ESP_LOGD(TAG, "MDMCFG3:             0x%X", readRegister(CC1101_CONFIG::MDMCFG3));
-        ESP_LOGD(TAG, "MDMCFG2:             0x%X", readRegister(CC1101_CONFIG::MDMCFG2));
-        ESP_LOGD(TAG, "MDMCFG1:             0x%X", readRegister(CC1101_CONFIG::MDMCFG1));
-        ESP_LOGD(TAG, "MDMCFG0:             0x%X", readRegister(CC1101_CONFIG::MDMCFG0));
-        ESP_LOGD(TAG, "DEVIATN:             0x%X", readRegister(CC1101_CONFIG::DEVIATN));
-        ESP_LOGD(TAG, "MCSM2:               0x%X", readRegister(CC1101_CONFIG::MCSM2));
-        ESP_LOGD(TAG, "MCSM1:               0x%X", readRegister(CC1101_CONFIG::MCSM1));
-        ESP_LOGD(TAG, "MCSM0:               0x%X", readRegister(CC1101_CONFIG::MCSM0));
-        ESP_LOGD(TAG, "FOCCFG:              0x%X", readRegister(CC1101_CONFIG::FOCCFG));
-        ESP_LOGD(TAG, "BSCFG:               0x%X", readRegister(CC1101_CONFIG::BSCFG));
-        ESP_LOGD(TAG, "AGCCTRL2:            0x%X", readRegister(CC1101_CONFIG::AGCCTRL2));
-        ESP_LOGD(TAG, "AGCCTRL1:            0x%X", readRegister(CC1101_CONFIG::AGCCTRL1));
-        ESP_LOGD(TAG, "AGCCTRL0:            0x%X", readRegister(CC1101_CONFIG::AGCCTRL0));
-        ESP_LOGD(TAG, "WOREVT1:             0x%X", readRegister(CC1101_CONFIG::WOREVT1));
-        ESP_LOGD(TAG, "WOREVT0:             0x%X", readRegister(CC1101_CONFIG::WOREVT0));
-        ESP_LOGD(TAG, "WORCTRL:             0x%X", readRegister(CC1101_CONFIG::WORCTRL));
-        ESP_LOGD(TAG, "FREND1:              0x%X", readRegister(CC1101_CONFIG::FREND1));
-        ESP_LOGD(TAG, "FREND0:              0x%X", readRegister(CC1101_CONFIG::FREND0));
-        ESP_LOGD(TAG, "FSCAL3:              0x%X", readRegister(CC1101_CONFIG::FSCAL3));
-        ESP_LOGD(TAG, "FSCAL2:              0x%X", readRegister(CC1101_CONFIG::FSCAL2));
-        ESP_LOGD(TAG, "FSCAL1:              0x%X", readRegister(CC1101_CONFIG::FSCAL1));
-        ESP_LOGD(TAG, "FSCAL0:              0x%X", readRegister(CC1101_CONFIG::FSCAL0));
-        ESP_LOGD(TAG, "RCCTRL1:             0x%X", readRegister(CC1101_CONFIG::RCCTRL1));
-        ESP_LOGD(TAG, "RCCTRL0:             0x%X", readRegister(CC1101_CONFIG::RCCTRL0));
-        ESP_LOGD(TAG, "FSTEST:              0x%X", readRegister(CC1101_CONFIG::FSTEST));
-        ESP_LOGD(TAG, "PTEST:               0x%X", readRegister(CC1101_CONFIG::PTEST));
-        ESP_LOGD(TAG, "AGCTEST:             0x%X", readRegister(CC1101_CONFIG::AGCTEST));
-        ESP_LOGD(TAG, "TEST2:               0x%X", readRegister(CC1101_CONFIG::TEST2));
-        ESP_LOGD(TAG, "TEST1:               0x%X", readRegister(CC1101_CONFIG::TEST1));
-        ESP_LOGD(TAG, "TEST0:               0x%X", readRegister(CC1101_CONFIG::TEST0));
-        ESP_LOGD(TAG, "PARTNUM:             0x%X", readRegister(CC1101_CONFIG::PARTNUM));
-        ESP_LOGD(TAG, "VERSION:             0x%X", readRegister(CC1101_CONFIG::VERSION));
-        ESP_LOGD(TAG, "FREQEST:             0x%X", readRegister(CC1101_CONFIG::FREQEST));
-        ESP_LOGD(TAG, "LQI:                 0x%X", readRegister(CC1101_CONFIG::LQI));
-        ESP_LOGD(TAG, "RSSI:                0x%X", readRegister(CC1101_CONFIG::RSSI));
-        ESP_LOGD(TAG, "MARCSTATE:           0x%X", readRegister(CC1101_CONFIG::MARCSTATE));
-        ESP_LOGD(TAG, "WORTIME1:            0x%X", readRegister(CC1101_CONFIG::WORTIME1));
-        ESP_LOGD(TAG, "WORTIME0:            0x%X", readRegister(CC1101_CONFIG::WORTIME0));
-        ESP_LOGD(TAG, "PKTSTATUS:           0x%X", readRegister(CC1101_CONFIG::PKTSTATUS));
-        ESP_LOGD(TAG, "VCO_VC_DAC:          0x%X", readRegister(CC1101_CONFIG::VCO_VC_DAC));
-        ESP_LOGD(TAG, "TXBYTES:             0x%X", readRegister(CC1101_CONFIG::TXBYTES));
-        ESP_LOGD(TAG, "RXBYTES:             0x%X", readRegister(CC1101_CONFIG::RXBYTES));
+        ESP_LOGD(TAG, "IOCFG2:              " HEX_FMT, readRegister(CC1101_CONFIG::IOCFG2));
+        ESP_LOGD(TAG, "IOCFG1:              " HEX_FMT, readRegister(CC1101_CONFIG::IOCFG1));
+        ESP_LOGD(TAG, "IOCFG0:              " HEX_FMT, readRegister(CC1101_CONFIG::IOCFG0));
+        ESP_LOGD(TAG, "FIFOTHR:             " HEX_FMT, readRegister(CC1101_CONFIG::FIFOTHR));
+        ESP_LOGD(TAG, "SYNC1:               " HEX_FMT, readRegister(CC1101_CONFIG::SYNC1));
+        ESP_LOGD(TAG, "SYNC0:               " HEX_FMT, readRegister(CC1101_CONFIG::SYNC0));
+        ESP_LOGD(TAG, "PKTLEN:              " HEX_FMT, readRegister(CC1101_CONFIG::PKTLEN));
+        ESP_LOGD(TAG, "PKTCTRL1:            " HEX_FMT, readRegister(CC1101_CONFIG::PKTCTRL1));
+        ESP_LOGD(TAG, "PKTCTRL0:            " HEX_FMT, readRegister(CC1101_CONFIG::PKTCTRL0));
+        ESP_LOGD(TAG, "ADDR:                " HEX_FMT, readRegister(CC1101_CONFIG::ADDR));
+        ESP_LOGD(TAG, "CHANNR:              " HEX_FMT, readRegister(CC1101_CONFIG::CHANNR));
+        ESP_LOGD(TAG, "FSCTRL1              " HEX_FMT, readRegister(CC1101_CONFIG::FSCTRL1));
+        ESP_LOGD(TAG, "FSCTRL0:             " HEX_FMT, readRegister(CC1101_CONFIG::FSCTRL0));
+        ESP_LOGD(TAG, "FREQ2:               " HEX_FMT, readRegister(CC1101_CONFIG::FREQ2));
+        ESP_LOGD(TAG, "FREQ1:               " HEX_FMT, readRegister(CC1101_CONFIG::FREQ1));
+        ESP_LOGD(TAG, "FREQ0:               " HEX_FMT, readRegister(CC1101_CONFIG::FREQ0));
+        ESP_LOGD(TAG, "MDMCFG4:             " HEX_FMT, readRegister(CC1101_CONFIG::MDMCFG4));
+        ESP_LOGD(TAG, "MDMCFG3:             " HEX_FMT, readRegister(CC1101_CONFIG::MDMCFG3));
+        ESP_LOGD(TAG, "MDMCFG2:             " HEX_FMT, readRegister(CC1101_CONFIG::MDMCFG2));
+        ESP_LOGD(TAG, "MDMCFG1:             " HEX_FMT, readRegister(CC1101_CONFIG::MDMCFG1));
+        ESP_LOGD(TAG, "MDMCFG0:             " HEX_FMT, readRegister(CC1101_CONFIG::MDMCFG0));
+        ESP_LOGD(TAG, "DEVIATN:             " HEX_FMT, readRegister(CC1101_CONFIG::DEVIATN));
+        ESP_LOGD(TAG, "MCSM2:               " HEX_FMT, readRegister(CC1101_CONFIG::MCSM2));
+        ESP_LOGD(TAG, "MCSM1:               " HEX_FMT, readRegister(CC1101_CONFIG::MCSM1));
+        ESP_LOGD(TAG, "MCSM0:               " HEX_FMT, readRegister(CC1101_CONFIG::MCSM0));
+        ESP_LOGD(TAG, "FOCCFG:              " HEX_FMT, readRegister(CC1101_CONFIG::FOCCFG));
+        ESP_LOGD(TAG, "BSCFG:               " HEX_FMT, readRegister(CC1101_CONFIG::BSCFG));
+        ESP_LOGD(TAG, "AGCCTRL2:            " HEX_FMT, readRegister(CC1101_CONFIG::AGCCTRL2));
+        ESP_LOGD(TAG, "AGCCTRL1:            " HEX_FMT, readRegister(CC1101_CONFIG::AGCCTRL1));
+        ESP_LOGD(TAG, "AGCCTRL0:            " HEX_FMT, readRegister(CC1101_CONFIG::AGCCTRL0));
+        ESP_LOGD(TAG, "WOREVT1:             " HEX_FMT, readRegister(CC1101_CONFIG::WOREVT1));
+        ESP_LOGD(TAG, "WOREVT0:             " HEX_FMT, readRegister(CC1101_CONFIG::WOREVT0));
+        ESP_LOGD(TAG, "WORCTRL:             " HEX_FMT, readRegister(CC1101_CONFIG::WORCTRL));
+        ESP_LOGD(TAG, "FREND1:              " HEX_FMT, readRegister(CC1101_CONFIG::FREND1));
+        ESP_LOGD(TAG, "FREND0:              " HEX_FMT, readRegister(CC1101_CONFIG::FREND0));
+        ESP_LOGD(TAG, "FSCAL3:              " HEX_FMT, readRegister(CC1101_CONFIG::FSCAL3));
+        ESP_LOGD(TAG, "FSCAL2:              " HEX_FMT, readRegister(CC1101_CONFIG::FSCAL2));
+        ESP_LOGD(TAG, "FSCAL1:              " HEX_FMT, readRegister(CC1101_CONFIG::FSCAL1));
+        ESP_LOGD(TAG, "FSCAL0:              " HEX_FMT, readRegister(CC1101_CONFIG::FSCAL0));
+        ESP_LOGD(TAG, "RCCTRL1:             " HEX_FMT, readRegister(CC1101_CONFIG::RCCTRL1));
+        ESP_LOGD(TAG, "RCCTRL0:             " HEX_FMT, readRegister(CC1101_CONFIG::RCCTRL0));
+        ESP_LOGD(TAG, "FSTEST:              " HEX_FMT, readRegister(CC1101_CONFIG::FSTEST));
+        ESP_LOGD(TAG, "PTEST:               " HEX_FMT, readRegister(CC1101_CONFIG::PTEST));
+        ESP_LOGD(TAG, "AGCTEST:             " HEX_FMT, readRegister(CC1101_CONFIG::AGCTEST));
+        ESP_LOGD(TAG, "TEST2:               " HEX_FMT, readRegister(CC1101_CONFIG::TEST2));
+        ESP_LOGD(TAG, "TEST1:               " HEX_FMT, readRegister(CC1101_CONFIG::TEST1));
+        ESP_LOGD(TAG, "TEST0:               " HEX_FMT, readRegister(CC1101_CONFIG::TEST0));
+        ESP_LOGD(TAG, "PARTNUM:             " HEX_FMT, readRegister(CC1101_CONFIG::PARTNUM));
+        ESP_LOGD(TAG, "VERSION:             " HEX_FMT, readRegister(CC1101_CONFIG::VERSION));
+        ESP_LOGD(TAG, "FREQEST:             " HEX_FMT, readRegister(CC1101_CONFIG::FREQEST));
+        ESP_LOGD(TAG, "LQI:                 " HEX_FMT, readRegister(CC1101_CONFIG::LQI));
+        ESP_LOGD(TAG, "RSSI:                " HEX_FMT, readRegister(CC1101_CONFIG::RSSI));
+        ESP_LOGD(TAG, "MARCSTATE:           " HEX_FMT, readRegister(CC1101_CONFIG::MARCSTATE));
+        ESP_LOGD(TAG, "WORTIME1:            " HEX_FMT, readRegister(CC1101_CONFIG::WORTIME1));
+        ESP_LOGD(TAG, "WORTIME0:            " HEX_FMT, readRegister(CC1101_CONFIG::WORTIME0));
+        ESP_LOGD(TAG, "PKTSTATUS:           " HEX_FMT, readRegister(CC1101_CONFIG::PKTSTATUS));
+        ESP_LOGD(TAG, "VCO_VC_DAC:          " HEX_FMT, readRegister(CC1101_CONFIG::VCO_VC_DAC));
+        ESP_LOGD(TAG, "TXBYTES:             " HEX_FMT, readRegister(CC1101_CONFIG::TXBYTES));
+        ESP_LOGD(TAG, "RXBYTES:             " HEX_FMT, readRegister(CC1101_CONFIG::RXBYTES));
         byte patables[8];
         readBurstRegister(CC1101_CONFIG::PATABLE, patables, 8);
-        ESP_LOGD(TAG, "PA_TABLE0:           0x%X", patables[0]);
-        ESP_LOGD(TAG, "PA_TABLE1:           0x%X", patables[1]);
-        ESP_LOGD(TAG, "PA_TABLE2:           0x%X", patables[2]);
-        ESP_LOGD(TAG, "PA_TABLE3:           0x%X", patables[3]);
-        ESP_LOGD(TAG, "PA_TABLE4:           0x%X", patables[4]);
-        ESP_LOGD(TAG, "PA_TABLE5:           0x%X", patables[5]);
-        ESP_LOGD(TAG, "PA_TABLE6:           0x%X", patables[6]);
-        ESP_LOGD(TAG, "PA_TABLE7:           0x%X", patables[7]);
+        ESP_LOGD(TAG, "PA_TABLE0:           " HEX_FMT, patables[0]);
+        ESP_LOGD(TAG, "PA_TABLE1:           " HEX_FMT, patables[1]);
+        ESP_LOGD(TAG, "PA_TABLE2:           " HEX_FMT, patables[2]);
+        ESP_LOGD(TAG, "PA_TABLE3:           " HEX_FMT, patables[3]);
+        ESP_LOGD(TAG, "PA_TABLE4:           " HEX_FMT, patables[4]);
+        ESP_LOGD(TAG, "PA_TABLE5:           " HEX_FMT, patables[5]);
+        ESP_LOGD(TAG, "PA_TABLE6:           " HEX_FMT, patables[6]);
+        ESP_LOGD(TAG, "PA_TABLE7:           " HEX_FMT, patables[7]);
 #endif
     }
-
-    bool CC1101Device::lowerChipSelect()
+    void CC1101Device::lowerChipSelect()
     {
-        return digitalWrite(m_spiMaster->ChipSelectPin(), 0);
+        digitalWrite(m_spiMaster->ChipSelectPin(), 0);
     }
 
-    bool CC1101Device::raiseChipSelect()
+    void CC1101Device::raiseChipSelect()
     {
-        return digitalWrite(m_spiMaster->ChipSelectPin(), 1);
+        digitalWrite(m_spiMaster->ChipSelectPin(), 1);
     }
 
     void CC1101Device::waitForMisoLow()
     {
-        while (gpio_get_level(m_spiMaster->MisoPin()) == 1)
+        while (do_gpio_get_level(m_spiMaster->MisoPin()) == 1)
             delayMilliseconds(1);
     }
-
     void CC1101Device::enableReceiveMode()
     {
         byte outData;
@@ -797,27 +825,33 @@ namespace TI_CC1101
             byte chipState = 0;
 
             outData = sendStrobe(CC1101_CONFIG::SRX);
-            ESP_LOGD(TAG, "SRX strobe returned status 0x%0X", outData);
+            ESP_LOGD(TAG, "SRX strobe returned status " HEX_FMT, outData);
             handleCommonStatusCodes(outData, true);
 
-            chipState = outData & 0b01110000; // check chip state (pg 31)
-            if (chipState != 0)
+            chipState = outData & 0b11110000; // check chip state (pg 31)
+            if (chipState == 0b0001)
             {
                 break;
             }
-            delayMilliseconds(1);
+            delayMicroseconds(40);
         };
     }
-
-    bool CC1101Device::digitalWrite(int pin, uint32_t value)
+#ifndef ARDUINO
+    bool CC1101Device::digitalWrite(gpio_num_t pin, uint32_t value)
     {
-        return (gpio_set_level(static_cast<gpio_num_t>(pin), value) == ESP_OK);
+        return (do_gpio_set_level(static_cast<gpio_num_t>(pin), value) == ESP_OK);
     }
 
     void CC1101Device::delayMilliseconds(int millis)
     {
         vTaskDelay(pdMS_TO_TICKS(millis));
     }
+#else
+    void CC1101Device::delayMilliseconds(int millis)
+    {
+        delay(millis);
+    }
+#endif
     byte CC1101Device::readRegister(byte address)
     {
         bool bRet  = true;
@@ -829,11 +863,7 @@ namespace TI_CC1101
         }
         address |= kSpiHeaderReadBit;
 
-        lowerChipSelect();
-        waitForMisoLow();
-        CBRA(m_spiMaster->WriteByte(address, value));
-        CBRA(m_spiMaster->WriteByte(0, value));
-        raiseChipSelect();
+        CBRA(m_spiMaster->ReadRegister(address,value));
 
     Error:
         if (!bRet)
@@ -846,22 +876,14 @@ namespace TI_CC1101
     bool CC1101Device::readBurstRegister(byte address, byte *buffer, int len)
     {
         bool bRet = true;
-        byte statusCode;
         if (address >= CC1101_CONFIG::PARTNUM && address <= CC1101_CONFIG::RCCTRL0_STATUS)
         {
             ESP_LOGE(TAG, "Control registers cannot be read with burst access");
             return false;
         }
         address |= (kSpiBurstAccessBit | kSpiHeaderReadBit);
-        lowerChipSelect();
-        waitForMisoLow();
-        CBRA(m_spiMaster->WriteByte(address, statusCode));
-        for (int i = 0; i < len; i++)
-        {
-            CBRA(m_spiMaster->WriteByte(0, statusCode));
-            buffer[i] = statusCode;
-        }
-        raiseChipSelect();
+
+        CBRA(m_spiMaster->ReadBurstRegister(address,buffer,len));
     Error:
         if (!bRet)
         {
@@ -881,19 +903,19 @@ namespace TI_CC1101
         readBurstRegister(CC1101_CONFIG::RXFIFO, scratch, avail);
         for (int i = 0; i < avail; i++)
         {
-            ESP_LOGD(TAG, "%s buffer[%d]= 0x%0X", __FUNCTION__, i, scratch[i]);
+            ESP_LOGD(TAG, "%s buffer[%d]= " HEX_FMT, __FUNCTION__, i, scratch[i]);
         }
         if (m_deviceConfig.EnableAppendStatusBytes)
         {
             readBurstRegister(CC1101_CONFIG::RXFIFO, status, 2);
-            ESP_LOGD(TAG, "%s status= {0x%0X , 0x%0X}", __FUNCTION__, status[0], status[1]);
+            ESP_LOGD(TAG, "%s status= {" HEX_FMT "," HEX_FMT "}", __FUNCTION__, status[0], status[1]);
         }
         if ((regVal & ~kRxFifoByteCountMask) != 0)
         {
             byte resetStatus;
             ESP_LOGW(TAG, "RX_FIFO overflow, sending reset");
             m_spiMaster->WriteByte(CC1101_CONFIG::SFRX, resetStatus);
-            ESP_LOGW(TAG, "RX_FIFO overflow, new status 0x%0X", resetStatus);
+            ESP_LOGW(TAG, "RX_FIFO overflow, new status " HEX_FMT, resetStatus);
         }
     }
 
@@ -908,33 +930,22 @@ namespace TI_CC1101
     byte CC1101Device::writeRegister(byte address, byte value)
     {
         byte statusCode = 0;
-        lowerChipSelect();
-        waitForMisoLow();
-        m_spiMaster->WriteByteToAddress(address, value, statusCode);
-        raiseChipSelect();
 
+        m_spiMaster->WriteByteToAddress(address, value, statusCode);
         return statusCode;
     }
 
     void CC1101Device::writeBurstRegister(byte address, byte *values, int valueLen)
     {
         byte statusCode = 0;
-        lowerChipSelect();
-        waitForMisoLow();
-        m_spiMaster->WriteByte(address | kSpiBurstAccessBit, statusCode);
-        ESP_LOGD(TAG, "Write burst to address 0x%0X statusCode 0x%0X", address, statusCode);
-        m_spiMaster->WriteBytes(values, valueLen, statusCode);
-        ESP_LOGD(TAG, "Write values to address 0x%0X statusCode 0x%0X", address, statusCode);
-        raiseChipSelect();
+        m_spiMaster->WriteBytesToAddress(address | kSpiBurstAccessBit,values, valueLen, statusCode);
+        ESP_LOGD(TAG, "Write values to address " HEX_FMT " statusCode " HEX_FMT, address, statusCode);
     }
 
     byte CC1101Device::sendStrobe(byte strobeCmd)
     {
         byte outStatus = 0;
-        lowerChipSelect();
-        waitForMisoLow();
         m_spiMaster->WriteByte(strobeCmd, outStatus);
-        raiseChipSelect();
 
         return outStatus;
     }
@@ -1040,7 +1051,7 @@ namespace TI_CC1101
                 handleCommonStatusCodes(statusCode, false);
                 statusCode = writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::CHIP_RDY_N);
                 handleCommonStatusCodes(statusCode, false);
-                ESP_LOGD(TAG, "%s: Writing PKTCTRL0 0x%X for Packet format %d", __FUNCTION__, pktctrlVal, (int)m_deviceConfig.PacketFmt);
+                ESP_LOGD(TAG, "%s: Writing PKTCTRL0 " HEX_FMT " for Packet format %d", __FUNCTION__, pktctrlVal, (int)m_deviceConfig.PacketFmt);
                 statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
 
                 // why?
@@ -1052,7 +1063,7 @@ namespace TI_CC1101
                     handleCommonStatusCodes(statusCode, false);
                     statusCode = writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::SERIAL_DATA_OUTPUT);
                     handleCommonStatusCodes(statusCode, false);
-                    ESP_LOGD(TAG, "%s: Writing PKTCTRL0 0x%X for Packet format 0x%X, length cfg 0x%X", __FUNCTION__, pktctrlVal, (int)m_deviceConfig.PacketFmt, (int)m_deviceConfig.PacketLengthCfg);
+                    ESP_LOGD(TAG, "%s: Writing PKTCTRL0 " HEX_FMT " for Packet format " HEX_FMT " length cfg " HEX_FMT, __FUNCTION__, pktctrlVal, (int)m_deviceConfig.PacketFmt, (int)m_deviceConfig.PacketLengthCfg);
                     statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
                     handleCommonStatusCodes(statusCode, false);
 
@@ -1148,9 +1159,8 @@ namespace TI_CC1101
 
         if ((machineState == StatusByteStateMachineMode::FIFOOverflowRX) && (fifoBytesAvail > 0))
         {
-            ESP_LOGD(TAG, "%s statusCode 0x%02X, fifo bytes available 0x%02X", __FUNCTION__, status, fifoBytesAvail);
+            ESP_LOGD(TAG, "%s statusCode " HEX_FMT ", fifo bytes available " HEX_FMT , __FUNCTION__, status, fifoBytesAvail);
         }
-
         switch (machineState)
         {
             // RX_FIFO overflow
@@ -1174,15 +1184,26 @@ namespace TI_CC1101
             case StatusByteStateMachineMode::IDLE:
                 break;
             default:
-                ESP_LOGD(TAG, "%s status code not handle was 0x%X", __FUNCTION__, status);
+                ESP_LOGD(TAG, "%s status code not handled was " HEX_FMT, __FUNCTION__, status);
                 break;
         }
     }
+#ifndef ARDUINO
     void IRAM_ATTR CC1101Device::gpioISR(void *thisPtr)
     {
         CC1101Device *That   = static_cast<CC1101Device *>(thisPtr);
         uint32_t      ignore = 0;
         xQueueSendFromISR(That->m_ISRQueueHandle, (void *)&ignore, NULL);
     }
+#else
+    void IRAM_ATTR CC1101Device::gpioISR()
+    {
+        if(snm_thisPtr != nullptr)
+        {
+            snm_thisPtr->m_dataReceived = true;
+        }
+    }
+#endif
+
 
 } // namespace TI_CC1101

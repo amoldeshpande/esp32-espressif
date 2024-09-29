@@ -14,6 +14,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #pragma once
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
 #include "LocalTypes.h"
 namespace TI_CC1101
 {

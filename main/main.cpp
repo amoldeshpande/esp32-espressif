@@ -43,7 +43,7 @@ extern "C" void app_main(void)
         .clockFrequencyHz = 4'000'000,
         .queueSize = 8,
         .spiMode = SpiMode::ModeZero,
-        .spiHost = Esp32SPIHost::VSPI
+        .spiHost = Esp32SPIHost::HOST_VSPI
     };
     CC110DeviceConfig somfyRadioConfig = {
         .TxPin = GPIO_NUM_13,
