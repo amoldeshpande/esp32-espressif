@@ -1,4 +1,4 @@
-This was an attempt to implement a nice CC1101 driver library for my Somfy blinds, using  ESP-IDF. An attempt at also made with Arduino ,but I could not get a CC1101 to receive data using this code, so I eventually gave up. 
+This was an attempt to implement a nice CC1101 driver library for my Somfy blinds, using  ESP-IDF. An attempt was also made with Arduino ,but I could not get a CC1101 to receive data using this code, so I eventually gave up. 
 
 
 Inspiration/example code from several projects:
