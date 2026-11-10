@@ -13,10 +13,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #pragma once
-#ifndef ARDUINO
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
-#endif
+#include <freertos/queue.h>
 #include <vector>
 #include <memory>
 #include "CC1101Lib.h"
@@ -25,9 +24,6 @@
 namespace TI_CC1101
 {
     class SpiMaster;
-#ifdef ARDUINO
-    typedef void* QueueHandle_t;
-#endif
 
     struct CC110DeviceConfig
     {
@@ -36,6 +32,7 @@ namespace TI_CC1101
         float                     OscillatorFrequencyMHz{26};
         float                     CarrierFrequencyMHz{433.62};
         float                     ReceiveFilterBandwidthKHz{812.5};
+        int8_t                    FrequencyOffsetSteps{0}; // Synthesizer steps of f_XOSC / 16384.
         float                     FrequencyDeviationKhz{47.6};
         int                       TxPower{10}; // Also called Output Power in the datasheet
         ModulationType            Modulation{ModulationType::ASK_OOK};
@@ -48,6 +45,7 @@ namespace TI_CC1101
         SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
         AddressCheckConfiguration AddressCheck{AddressCheckConfiguration::None};
         bool                      EnableAppendStatusBytes{false};
+        bool                      UseSomfyRtsRxProfile{false};
 
         QueueHandle_t InterruptQueue;
 
@@ -79,9 +77,6 @@ namespace TI_CC1101
         const byte kChipVersion = 0x14;
 
         QueueHandle_t m_ISRQueueHandle;
-        volatile bool m_dataReceived = true;
-
-        static CC1101Device* snm_thisPtr;
 
       public:
         CC1101Device();
@@ -90,6 +85,8 @@ namespace TI_CC1101
         void Reset();
         bool BeginReceive();
         void Update();
+        int ReadRssiDbm();
+        bool RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps);
         void SetFrequencyMHz(float frequencyMHz);
         void SetReceiveChannelFilterBandwidth(float bandwidthKHz);
         void SetDataRate(byte Exponent, byte Mantissa);
@@ -108,18 +105,8 @@ namespace TI_CC1101
         void DumpRegisters();
 
       protected:
-        void               lowerChipSelect();
-        void               raiseChipSelect();
-        void               waitForMisoLow();
-        void               enableReceiveMode();
-#ifndef ARDUINO
-        bool               digitalWrite(gpio_num_t pin, uint32_t value);
-        esp_err_t          do_gpio_set_level(gpio_num_t pin, int level) {return gpio_set_level(pin,level);}
-        int                do_gpio_get_level(gpio_num_t pin) {return gpio_get_level(pin);}
-#else
-        int                do_gpio_set_level(int pin, int level) {digitalWrite(pin,level); return 0;}
-        int                do_gpio_get_level(int pin) {return digitalRead(pin);}
-#endif
+        bool               enableReceiveMode();
+        bool               verifyAsyncConfiguration();
         void               delayMilliseconds(int millis);
         [[nodiscard]] byte readRegister(byte address);
         bool               readBurstRegister(byte address, byte *buffer, int len);
@@ -133,14 +120,10 @@ namespace TI_CC1101
         void               regConfig();
 
         void handleCommonStatusCodes(byte status, bool wasReadOperation);
-        void readRXFIFO(byte *buffer, int expectedCount); // will reset FIFO if overflowed.
+        void readRXFIFO(int expectedCount); // will reset FIFO if overflowed.
 
         void setMDMCFG2();
 
-#ifndef ARDUINO
         static void IRAM_ATTR gpioISR(void *);
-#else
-        static void IRAM_ATTR gpioISR();
-#endif
     };
 } // namespace TI_CC1101

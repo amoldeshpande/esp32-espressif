@@ -13,11 +13,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <climits>
 #include <cmath>
-#ifndef ARDUINO
-#include <driver/rtc_io.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <format>
-#endif
 #include "CC1101Device.h"
 #include "CC1101Lib.h"
 #include "SpiMaster.h"
@@ -27,7 +28,60 @@ static const char *TAG = "CC1101Device";
 
 namespace TI_CC1101
 {
-    CC1101Device *CC1101Device::snm_thisPtr;
+    // MDMCFG4 has two-bit bandwidth fields above the four-bit data rate exponent.
+    static constexpr byte     kBandwidthFieldMask     = 0x03;
+    static constexpr unsigned kBandwidthMantissaShift = 4;
+    static constexpr byte     kDataRateExponentMask   = (1U << kBandwidthMantissaShift) - 1;
+    static constexpr unsigned kHertzPerKHz            = 1'000;
+
+    struct RxModemPreset
+    {
+        byte rateExponent;
+        byte rateMantissa;
+        byte bitSync;
+        byte gainControl2;
+        byte gainControl1;
+        byte gainControl0;
+        byte test2;
+        byte test1;
+    };
+
+    // The original asynchronous modem settings from SmartRF Studio.
+    static constexpr RxModemPreset kSmartRfRxModem = {
+        .rateExponent = 5,
+        .rateMantissa = 0x83, // About 1.2 kBaud at 26 MHz.
+        .bitSync      = 0x6C, // Clock recovery starts at 2KI and 3KP, with data rate offset compensation disabled.
+        .gainControl2 = 0x03, // 33 dB target, with all analog and digital gain settings available.
+        .gainControl1 = 0x40, // Reduce LNA gain first. Carrier sense is at the gain target, with no relative threshold.
+        .gainControl0 = 0x91, // Medium hysteresis, 16 samples after a gain change, 8 dB OOK threshold, no gain freeze.
+        .test2        = 0x88, // Original CC1101 analog settings for the wide filter.
+        .test1        = 0x31,
+    };
+
+    // SmartRC v2.5.7 asynchronous modem settings used by ESPSomfy-RTS.
+    static constexpr RxModemPreset kSomfyRxModem = {
+        .rateExponent = 7,
+        .rateMantissa = 0x93, // About 5 kBaud at 26 MHz.
+        .bitSync      = 0x1C, // Clock recovery starts at KI and 2KP, with data rate offset compensation disabled.
+        .gainControl2 = 0xC7, // 42 dB target, all LNA settings, three highest digital gain settings disabled.
+        .gainControl1 = 0x00, // Reduce LNA2 gain first. Carrier sense is at the gain target, with no relative threshold.
+        .gainControl0 = 0xB2, // Medium hysteresis, 32 samples after a gain change, 12 dB OOK threshold, no gain freeze.
+        .test2        = 0x81, // CC1101 analog settings for a receive bandwidth below 325 kHz.
+        .test1        = 0x35,
+    };
+
+    static constexpr byte     kMarcStateMask       = 0x1F; // MARCSTATE[4:0] is the radio state.
+    static constexpr byte     kMarcStateIdle       = 0x01;
+    static constexpr byte     kMarcStateRx         = 0x0D;
+    // Allow up to 3 ms for the radio to enter IDLE or to calibrate and enter RX.
+    static constexpr unsigned kStateTimeoutUs      = 3'000;
+    static constexpr unsigned kStatePollIntervalUs = 100;
+
+    static double channelFilterBandwidthKHz(float oscillatorFrequencyHz, byte exponent, byte mantissa)
+    {
+        // The CC1101 formula divides the crystal rate by 8 * (4 + mantissa) * 2^exponent.
+        return double(oscillatorFrequencyHz) / (kHertzPerKHz * 8 * (4 + mantissa) * (1U << exponent));
+    }
 
     void CC110DeviceConfig::DebugDump()
     {
@@ -63,7 +117,10 @@ namespace TI_CC1101
 
     bool CC1101Device::Init(std::shared_ptr<SpiMaster> &spiMaster, CC110DeviceConfig &deviceConfig)
     {
-        bool bRet      = true;
+        bool bRet = true;
+        byte partNumber;
+        byte chipVersion;
+
         m_spiMaster    = spiMaster;
         m_deviceConfig = deviceConfig;
 
@@ -74,7 +131,7 @@ namespace TI_CC1101
         }
         m_ISRQueueHandle = deviceConfig.InterruptQueue;
 
-        Reset();
+        CBRA(m_spiMaster->ResetDevice());
         regConfig();
         configure();
 
@@ -82,68 +139,78 @@ namespace TI_CC1101
 
         DumpRegisters();
 
-        byte partNumber  = readRegister(CC1101_CONFIG::PARTNUM);
-        byte chipVersion = readRegister(CC1101_CONFIG::VERSION);
+        partNumber  = readRegister(CC1101_CONFIG::PARTNUM);
+        chipVersion = readRegister(CC1101_CONFIG::VERSION);
 
         ESP_LOGI(TAG, "Part Number " HEX_FMT " and chip version " HEX_FMT, partNumber, chipVersion);
-        CBRA((partNumber == kPartNumber) && (chipVersion == kChipVersion));
+        if (partNumber != kPartNumber || chipVersion != kChipVersion)
+        {
+            ESP_LOGE(TAG, "Unexpected CC1101 part number or version");
+        }
+        CBRA(partNumber == kPartNumber && chipVersion == kChipVersion);
 
-        snm_thisPtr = this;
+        if (m_deviceConfig.PacketFmt == PacketFormat::AsyncSerialMode)
+        {
+            CBRA(verifyAsyncConfiguration());
+        }
 
     Error:
         return bRet;
     }
 
+    bool CC1101Device::verifyAsyncConfiguration()
+    {
+        bool               bRet                           = true;
+        // FREQ2:FREQ0 is a three-byte word. PKT_FORMAT is PKTCTRL0[5:4].
+
+        const byte         gdo2                           = readRegister(CC1101_CONFIG::IOCFG2);
+        const byte         packet                         = readRegister(CC1101_CONFIG::PKTCTRL0);
+        const byte         frequencyHigh                  = readRegister(CC1101_CONFIG::FREQ2);
+        const byte         frequencyMid                   = readRegister(CC1101_CONFIG::FREQ1);
+        const byte         frequencyLow                   = readRegister(CC1101_CONFIG::FREQ0);
+        const uint32_t     frequencyWord                  = (uint32_t(frequencyHigh) << (2 * CHAR_BIT)) |
+                                       (uint32_t(frequencyMid) << CHAR_BIT) | frequencyLow;
+        const double actualMHz       = frequencyWord * (m_oscillatorFrequencyHz / kFrequencyDivisor) / 1'000'000;
+        const byte   modem           = readRegister(CC1101_CONFIG::MDMCFG4);
+        const byte   rateMantissa    = readRegister(CC1101_CONFIG::MDMCFG3);
+        const int8_t offset          = static_cast<int8_t>(readRegister(CC1101_CONFIG::FSCTRL0));
+        // MDMCFG4[7:6] is the bandwidth exponent.
+        const double actualBandwidth = channelFilterBandwidthKHz(m_oscillatorFrequencyHz,
+                                                                 modem >> 6,
+                                                                 (modem >> kBandwidthMantissaShift) & kBandwidthFieldMask);
+        // MDMCFG3 omits the mantissa high bit; the rate divisor is 2^28.
+        const double rateKBaud       = double(m_oscillatorFrequencyHz) * ((1U << CHAR_BIT) + rateMantissa) *
+                                 (1U << (modem & kDataRateExponentMask)) / (double(kHertzPerKHz) * (1U << 28));
+        ESP_LOGI(TAG, "Readback: %.3f MHz, %.2f kHz BW, IOCFG2=0x%02X, PKTCTRL0=0x%02X",
+                 actualMHz, actualBandwidth, gdo2, packet);
+        // FSCTRL0 uses synthesizer steps of f_XOSC / 2^14.
+        ESP_LOGI(TAG, "RX modem: offset=%+.1f kHz, rate=%.2f kBaud, AGC=%02X/%02X/%02X",
+                 double(offset) * m_oscillatorFrequencyHz / (double((1U << 14)) * kHertzPerKHz), rateKBaud,
+                 readRegister(CC1101_CONFIG::AGCCTRL2), readRegister(CC1101_CONFIG::AGCCTRL1),
+                 readRegister(CC1101_CONFIG::AGCCTRL0));
+        // Allow 1 kHz of rounding in the frequency readback.
+        if (gdo2 != byte(ConfigValues::GDx_CFG_LowerSixBits::SERIAL_DATA_OUTPUT) || ((packet >> 4) & 0x03) != byte(PacketFormat::AsyncSerialMode) || offset != m_deviceConfig.FrequencyOffsetSteps || std::abs(actualMHz - m_carrierFrequencyMHz) > 0.001)
+        {
+            ESP_LOGE(TAG, "CC1101 configuration readback failed");
+            bRet = false;
+        }
+        return bRet;
+    }
+
     void CC1101Device::Reset()
     {
-        // See page 51, automatic POR (power-on reset)
-        //
-        /* * Set SCLK = 1 and SI = 0, to avoid potential problems with pin control mode (see Section 11.3).
-         * Strobe CSn low / high.
-         * Hold CSn low and then high for at least 40µs relative to pulling CSn low
-         * Pull CSn low and wait for SO to go low (CHIP_RDYn).
-         * Issue the SRES strobe on the SI line.
-         * When SO goes low again, reset is complete and the chip is in the IDLE state.
-         */
-        bool bRet       = true;
-        byte statusCode = 0;
-
-        CERA(do_gpio_set_level(m_spiMaster->ClockPin(), 1));
-        CERA(do_gpio_set_level(m_spiMaster->MosiPin(), 0));
-
-        // This is specific to the CC1101, so it does not go into SpiMaster
-        lowerChipSelect();
-        delayMicroseconds(1);
-        raiseChipSelect();
-        delayMicroseconds(41);
-        lowerChipSelect();
-        delayMicroseconds(1);
-        raiseChipSelect();
-
-        waitForMisoLow();
-
-        // This is a command strobe so we only need the lower 6 bits, i.e, the address.
-        // See page 32, Section 10.4
-        ESP_LOGI(TAG, "Sending reset");
-        CBRA(m_spiMaster->WriteByte(CC1101_CONFIG::SRES, statusCode));
-
-        waitForMisoLow();
-        raiseChipSelect();
-
-    Error:
-        if (!bRet)
-        {
-            ESP_LOGW(TAG, "CC1101 reset failed"); // reset failed
-        }
+        m_spiMaster->ResetDevice();
     }
     bool CC1101Device::BeginReceive()
     {
         bool          bRet    = true;
-#ifndef ARDUINO
-        gpio_config_t gpioConfig;
+        gpio_config_t gpioConfig{};
+        esp_err_t     result;
 
-        gpioConfig.intr_type    = GPIO_INTR_POSEDGE;
-        gpioConfig.pin_bit_mask = 1 << m_deviceConfig.RxPin;
+        gpioConfig.intr_type    = m_deviceConfig.PacketFmt == PacketFormat::AsyncSerialMode
+                                      ? GPIO_INTR_ANYEDGE
+                                      : GPIO_INTR_POSEDGE;
+        gpioConfig.pin_bit_mask = 1ULL << m_deviceConfig.RxPin;
         gpioConfig.mode         = GPIO_MODE_INPUT;
         gpioConfig.pull_up_en   = GPIO_PULLUP_DISABLE;
         gpioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -151,17 +218,20 @@ namespace TI_CC1101
         ESP_LOGD(TAG, "%s gpioconfig pin mask is " HEX_FMT, __FUNCTION__, (int)gpioConfig.pin_bit_mask);
         CERA(gpio_config(&gpioConfig));
 
-        CERA(gpio_install_isr_service(0));
+        result = gpio_install_isr_service(0);
+        if (result != ESP_ERR_INVALID_STATE)
+        {
+            CERA(result);
+        }
 
         CERA(gpio_isr_handler_add(m_deviceConfig.RxPin, gpioISR, this));
 
-#else // ARDUINO
-        pinMode(m_deviceConfig.RxPin,INPUT);
-        attachInterrupt(digitalPinToInterrupt(m_deviceConfig.RxPin),gpioISR,CHANGE);
-
-#endif
         // Turn on the radio for receive
-        enableReceiveMode();
+        if (!enableReceiveMode())
+        {
+            gpio_isr_handler_remove(m_deviceConfig.RxPin);
+            bRet = false;
+        }
 
         //esp_intr_dump(NULL);
     Error:
@@ -169,24 +239,64 @@ namespace TI_CC1101
         {
             ESP_LOGE(TAG, "%s failed", __PRETTY_FUNCTION__);
         }
-        return false;
+        return bRet;
     }
     void CC1101Device::Update()
     {
         uint32_t ignore = 0;
-#ifndef ARDUINO
-        if (xQueueReceive(m_ISRQueueHandle, &ignore, pdTICKS_TO_MS(100)) == pdTRUE)
+        // Bound each Update() call to 100 ms when the radio is idle.
+        if (xQueueReceive(m_ISRQueueHandle, &ignore, pdMS_TO_TICKS(100)) == pdTRUE)
         {
             ESP_LOGD(TAG, "interrupt received ");
             //gpio level % d ", 0);//gpio_get_level(m_deviceConfig.RxPin));
         }
-#else
-        if(m_dataReceived)
+    }
+
+    int CC1101Device::ReadRssiDbm()
+    {
+        const int8_t  raw              = static_cast<int8_t>(readRegister(CC1101_CONFIG::RSSI));
+        // The signed RSSI register uses half-dB steps with a typical 74 dB offset.
+        const int     rssiDbm          = raw / 2 - 74;
+        return rssiDbm;
+    }
+
+    bool CC1101Device::RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps)
+    {
+        bool       bRet   = true;
+        byte       status = 0;
+        bool       ready  = false;
+        const byte offset = static_cast<byte>(offsetSteps);
+
+        CERA(gpio_intr_disable(m_deviceConfig.RxPin));
+
+        if (m_spiMaster->WriteByte(CC1101_CONFIG::SIDLE, status))
         {
-          Serial.printf("data recvd");
-          m_dataReceived = false;
+            for (unsigned elapsedUs = 0; elapsedUs < kStateTimeoutUs; elapsedUs += kStatePollIntervalUs)
+            {
+                if ((readRegister(CC1101_CONFIG::MARCSTATE) & kMarcStateMask) == kMarcStateIdle)
+                {
+                    SetFrequencyMHz(frequencyMHz);
+                    SetReceiveChannelFilterBandwidth(bandwidthKHz);
+                    ready = m_spiMaster->WriteByteToAddress(CC1101_CONFIG::FSCTRL0, offset, status);
+                    if (ready)
+                    {
+                        ready = readRegister(CC1101_CONFIG::FSCTRL0) == offset;
+                    }
+                    if (ready)
+                    {
+                        ready = enableReceiveMode();
+                    }
+                    break;
+                }
+                delayMicroseconds(kStatePollIntervalUs);
+            }
         }
-#endif
+
+        xQueueReset(m_ISRQueueHandle);
+        bRet = gpio_intr_enable(m_deviceConfig.RxPin) == ESP_OK && ready;
+
+    Error:
+        return bRet;
     }
     // Page 75 of TI Datasheet
     // Frequency is a 24-bit word set via FREQ0,FREQ1 and FREQ2 registers
@@ -230,70 +340,32 @@ namespace TI_CC1101
         m_carrierFrequencyMHz = frequencyMHz;
         ESP_LOGI(TAG, "m_carrierFrequencyMHz is now " FLOAT_FMT, m_carrierFrequencyMHz);
     }
-    // Page 76 of TI Datasheet
-    //
-    // Filter B/W is in  top 4 bits of MDMCFG4
-    //  Calculated by the formula :  BW =  ( Crystal frequency / (8 * (4 + Mantissa)* 2^Exponent) )
-    //  Where:
-    //     Exponent is in bits 6 and 7 (Two MSBs) of MDMCFG4
-    //     Mantissa is bits 4 and 5
-    //
-    // The bottom 4 bits of MDMCFG4 are used to configure the Data rate exponent with the mantissa in the MDMCFG3 register
-    //
-    // Page 35 of the TI Datasheet gives a table of ranges for the 4x4 combinations of the 2-bit bitfields.
-    //
+    // Choose the nearest channel bandwidth while preserving MDMCFG4's data-rate exponent.
     void CC1101Device::SetReceiveChannelFilterBandwidth(float bandwidthKHz)
     {
         byte statusCode = 0;
         byte modemCFG   = readRegister(CC1101_CONFIG::MDMCFG4);
-        byte DataRate   = (byte)(modemCFG & 0x0F);
+        byte  bestSetting  = 0;
+        float bestError    = INFINITY;
+        float candidate;
+        float error;
+        byte  result;
 
-        ESP_LOGD(TAG, "%s: mdmcfg4 = " HEX_FMT , __FUNCTION__, modemCFG);
-
-        // Page 35 table in an array. The exponent is the horizontal stride (4 columns corresponding to the bit values 00,01,10,11)
-        // Mantissa is the vertical stride (4 rows corresponding to the bit values 00,01,10,11)
-        float constantPart     = m_oscillatorFrequencyHz / 8.0f / 1000.0f;
-        float allowableBWKHz[] = {
-            constantPart / (4 * 1), constantPart / (4 * 2), constantPart / (4 * 4), constantPart / (4 * 8),
-            constantPart / (5 * 1), constantPart / (5 * 2), constantPart / (5 * 4), constantPart / (5 * 8),
-            constantPart / (6 * 1), constantPart / (6 * 2), constantPart / (6 * 4), constantPart / (6 * 8),
-            constantPart / (7 * 1), constantPart / (7 * 2), constantPart / (7 * 4), constantPart / (7 * 8)};
-
-        // default to lowest allowed
-        byte Exponent     = 3;
-        byte Mantissa     = 3;
-        // scan the array.The order of the entries is decreasing but columnwise, so it's a bit awkward to scan
-        int  scannedCount = 0;
-        int  currentIndex = 4;
-        while (scannedCount < 16)
+        ESP_LOGD(TAG, "%s: mdmcfg4 = " HEX_FMT, __FUNCTION__, modemCFG);
+        // Try all 16 combinations: each setting packs a two-bit exponent above a two-bit mantissa.
+        for (byte setting = 0; setting < 16; ++setting)
         {
-            // if the bandwidth setting is between two values, choose the closer one
-            if (bandwidthKHz > allowableBWKHz[currentIndex])
+            candidate = static_cast<float>(channelFilterBandwidthKHz(m_oscillatorFrequencyHz, setting >> 2, setting & kBandwidthFieldMask));
+            error     = std::abs(candidate - bandwidthKHz);
+            if (error < bestError)
             {
-                int previousIndex = currentIndex - 4;
-                int index         = previousIndex;
-
-                float diffFromLarger  = allowableBWKHz[previousIndex] - bandwidthKHz;
-                float diffFromSmaller = bandwidthKHz - allowableBWKHz[currentIndex];
-
-                if (diffFromLarger > diffFromSmaller)
-                {
-                    index = currentIndex;
-                }
-                Mantissa = (byte)(index / 4);            // row in array above
-                Exponent = (byte)(index - Mantissa * 4); // mod
-                break;
-            }
-            scannedCount++;
-            currentIndex = currentIndex + 4;
-            if (currentIndex > 15)
-            {
-                currentIndex = currentIndex - 15;
+                bestError   = error;
+                bestSetting = setting;
             }
         }
-        byte result = (byte)(((Exponent << 2 | Mantissa) << 4) | DataRate);
+        result = static_cast<byte>((bestSetting << kBandwidthMantissaShift) | (modemCFG & kDataRateExponentMask));
 
-        ESP_LOGI(TAG, "%s:  input bw " FLOAT_FMT ", datarate " HEX_FMT " setting result=" HEX_FMT ", Mantissa=" HEX_FMT ",Exponent=" HEX_FMT , __FUNCTION__, bandwidthKHz, DataRate, result, Mantissa, Exponent);
+        ESP_LOGI(TAG, "%s: requested bandwidth " FLOAT_FMT " kHz, MDMCFG4=" HEX_FMT, __FUNCTION__, bandwidthKHz, result);
         statusCode = writeRegister(CC1101_CONFIG::MDMCFG4, result);
         handleCommonStatusCodes(statusCode, false);
     }
@@ -493,11 +565,7 @@ namespace TI_CC1101
             std::string patableFmtStr;
             for (int i = 0; i < 8; i++)
             {
-#ifndef ARDUINO
                 patableFmtStr.append(std::format(" {:x} ", patables[i]));
-#else
-                Serial.printf("[%d] " HEX_FMT ,i,patables[i]);
-#endif
             }
             ESP_LOGD(TAG, "PATABLE before: %s", patableFmtStr.c_str());
         }
@@ -512,11 +580,7 @@ namespace TI_CC1101
             std::string patableFmtStr;
             for (int i = 0; i < 8; i++)
             {
-#ifndef ARDUINO
                 patableFmtStr.append(std::format(" {:x} ", patables[i]));
-#else
-                Serial.printf("[%d] " HEX_FMT,i, patables[i]);
-#endif
             }
             ESP_LOGD(TAG, "PATABLE after: %s", patableFmtStr.c_str());
         }
@@ -802,56 +866,37 @@ namespace TI_CC1101
         ESP_LOGD(TAG, "PA_TABLE7:           " HEX_FMT, patables[7]);
 #endif
     }
-    void CC1101Device::lowerChipSelect()
+    bool CC1101Device::enableReceiveMode()
     {
-        digitalWrite(m_spiMaster->ChipSelectPin(), 0);
-    }
-
-    void CC1101Device::raiseChipSelect()
-    {
-        digitalWrite(m_spiMaster->ChipSelectPin(), 1);
-    }
-
-    void CC1101Device::waitForMisoLow()
-    {
-        while (do_gpio_get_level(m_spiMaster->MisoPin()) == 1)
-            delayMilliseconds(1);
-    }
-    void CC1101Device::enableReceiveMode()
-    {
-        byte outData;
-        for (int tries = 0; tries < 3; tries++) // Sometimes SRX fails to put chip in receive mode.
+        bool bRet = false;
+        // The status returned during SRX can still report the previous state.
+        byte status = 0;
+        byte state;
+        if (m_spiMaster->WriteByte(CC1101_CONFIG::SRX, status))
         {
-            byte chipState = 0;
-
-            outData = sendStrobe(CC1101_CONFIG::SRX);
-            ESP_LOGD(TAG, "SRX strobe returned status " HEX_FMT, outData);
-            handleCommonStatusCodes(outData, true);
-
-            chipState = outData & 0b11110000; // check chip state (pg 31)
-            if (chipState == 0b0001)
+            for (unsigned elapsedUs = 0; elapsedUs < kStateTimeoutUs; elapsedUs += kStatePollIntervalUs)
             {
-                break;
+                state = readRegister(CC1101_CONFIG::MARCSTATE) & kMarcStateMask;
+                if (state == kMarcStateRx)
+                {
+                    ESP_LOGI(TAG, "CC1101 entered RX (MARCSTATE=0x%02X)", state);
+                    bRet = true;
+                    break;
+                }
+                delayMicroseconds(kStatePollIntervalUs);
             }
-            delayMicroseconds(40);
-        };
+            if (!bRet)
+            {
+                ESP_LOGE(TAG, "CC1101 did not enter RX (MARCSTATE=0x%02X)",
+                         readRegister(CC1101_CONFIG::MARCSTATE) & kMarcStateMask);
+            }
+        }
+        return bRet;
     }
-#ifndef ARDUINO
-    bool CC1101Device::digitalWrite(gpio_num_t pin, uint32_t value)
-    {
-        return (do_gpio_set_level(static_cast<gpio_num_t>(pin), value) == ESP_OK);
-    }
-
     void CC1101Device::delayMilliseconds(int millis)
     {
         vTaskDelay(pdMS_TO_TICKS(millis));
     }
-#else
-    void CC1101Device::delayMilliseconds(int millis)
-    {
-        delay(millis);
-    }
-#endif
     byte CC1101Device::readRegister(byte address)
     {
         bool bRet  = true;
@@ -891,8 +936,9 @@ namespace TI_CC1101
         }
         return bRet;
     }
-    void CC1101Device::readRXFIFO(byte *buffer, int expectedCount)
+    void CC1101Device::readRXFIFO(int expectedCount)
     {
+        byte resetStatus;
         byte status[2];
         byte scratch[255]; // absolute max of RXFIFO
         byte regVal = readRegister(CC1101_CONFIG::RXBYTES);
@@ -912,7 +958,6 @@ namespace TI_CC1101
         }
         if ((regVal & ~kRxFifoByteCountMask) != 0)
         {
-            byte resetStatus;
             ESP_LOGW(TAG, "RX_FIFO overflow, sending reset");
             m_spiMaster->WriteByte(CC1101_CONFIG::SFRX, resetStatus);
             ESP_LOGW(TAG, "RX_FIFO overflow, new status " HEX_FMT, resetStatus);
@@ -1039,6 +1084,7 @@ namespace TI_CC1101
 
     void CC1101Device::configure()
     {
+        const RxModemPreset &preset     = m_deviceConfig.UseSomfyRtsRxProfile ? kSomfyRxModem : kSmartRfRxModem;
         byte statusCode = 0;
         byte pktctrlVal = (byte)(((int)m_deviceConfig.PacketFmt << 4 | (int)m_deviceConfig.PacketLengthCfg));
 
@@ -1067,8 +1113,7 @@ namespace TI_CC1101
                     statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
                     handleCommonStatusCodes(statusCode, false);
 
-                    // from SmartRF Studio
-                    SetDataRate(5, 0x83);
+                    SetDataRate(preset.rateExponent, preset.rateMantissa);
                 }
                 break;
             default:
@@ -1099,8 +1144,13 @@ namespace TI_CC1101
     void CC1101Device::regConfig()
     {
         byte returnValue = 0;
+        const bool somfyRts    = m_deviceConfig.UseSomfyRtsRxProfile &&
+                              m_deviceConfig.PacketFmt == PacketFormat::AsyncSerialMode;
+        const RxModemPreset &preset = somfyRts ? kSomfyRxModem : kSmartRfRxModem;
 
         returnValue = writeRegister(CC1101_CONFIG::FSCTRL1, 0x06);
+        handleCommonStatusCodes(returnValue, false);
+        returnValue = writeRegister(CC1101_CONFIG::FSCTRL0, static_cast<byte>(m_deviceConfig.FrequencyOffsetSteps));
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::MDMCFG0, 0xF8);
         handleCommonStatusCodes(returnValue, false);
@@ -1118,13 +1168,13 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::WORCTRL, 0xFB);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::BSCFG, 0x6C);
+        returnValue = writeRegister(CC1101_CONFIG::BSCFG, preset.bitSync);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL2, 0x03);
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL2, preset.gainControl2);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL1, 0x40);
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL1, preset.gainControl1);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL0, 0x91);
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL0, preset.gainControl0);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FSCAL3, 0xE9);
         handleCommonStatusCodes(returnValue, false);
@@ -1136,9 +1186,9 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FSTEST, 0x59);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::TEST2, 0x88);
+        returnValue = writeRegister(CC1101_CONFIG::TEST2, preset.test2);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::TEST1, 0x31);
+        returnValue = writeRegister(CC1101_CONFIG::TEST1, preset.test1);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FIFOTHR, 0x07);
         handleCommonStatusCodes(returnValue, false);
@@ -1166,8 +1216,7 @@ namespace TI_CC1101
             // RX_FIFO overflow
             case StatusByteStateMachineMode::FIFOOverflowRX:
                 {
-                    byte fifoBytes[fifoBytesAvail];
-                    readRXFIFO(fifoBytes, fifoBytesAvail);
+                    readRXFIFO(fifoBytesAvail);
                 }
                 break;
             case StatusByteStateMachineMode::FIFOOverflowTX:
@@ -1176,8 +1225,7 @@ namespace TI_CC1101
                 {
                     if ((fifoBytesAvail > 0) && wasReadOperation)
                     {
-                        byte fifoBytes[fifoBytesAvail];
-                        readRXFIFO(fifoBytes, fifoBytesAvail);
+                        readRXFIFO(fifoBytesAvail);
                     }
                 }
                 break;
@@ -1188,22 +1236,16 @@ namespace TI_CC1101
                 break;
         }
     }
-#ifndef ARDUINO
     void IRAM_ATTR CC1101Device::gpioISR(void *thisPtr)
     {
-        CC1101Device *That   = static_cast<CC1101Device *>(thisPtr);
-        uint32_t      ignore = 0;
-        xQueueSendFromISR(That->m_ISRQueueHandle, (void *)&ignore, NULL);
-    }
-#else
-    void IRAM_ATTR CC1101Device::gpioISR()
-    {
-        if(snm_thisPtr != nullptr)
+        CC1101Device  *device    = static_cast<CC1101Device *>(thisPtr);
+        const uint32_t timestamp = static_cast<uint32_t>(esp_timer_get_time());
+        BaseType_t     taskWoken = pdFALSE;
+        xQueueSendFromISR(device->m_ISRQueueHandle, &timestamp, &taskWoken);
+        if (taskWoken)
         {
-            snm_thisPtr->m_dataReceived = true;
+            portYIELD_FROM_ISR();
         }
     }
-#endif
-
 
 } // namespace TI_CC1101

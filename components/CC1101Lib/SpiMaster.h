@@ -15,13 +15,9 @@
 
 #pragma once
 #include "LocalTypes.h"
-#ifdef ARDUINO
-#include <stddef.h>
-#else
 #include <memory.h>
 #include <driver/spi_master.h>
 #include <driver/gpio.h>
-#endif
 
 namespace TI_CC1101
 {
@@ -39,9 +35,6 @@ namespace TI_CC1101
     HOST_HSPI = 0,
     HOST_VSPI = 1
   };
-  #ifdef ARDUINO
-  typedef void* spi_device_handle_t;
-  #endif
   struct SpiConfig
   {
     gpio_num_t misoPin;
@@ -58,7 +51,7 @@ namespace TI_CC1101
   class SpiMaster
   {
     protected:
-      spi_device_handle_t m_DeviceHandle;
+      spi_device_handle_t m_DeviceHandle{};
 
       const int kDmaChannelToUse = 0; // no DMA (for now ?)
       SpiConfig m_config;
@@ -78,19 +71,15 @@ namespace TI_CC1101
       bool WriteBytesToAddress(byte address,byte *toWrite, size_t arrayLen, byte&  outData);
       bool ReadBurstRegister(byte address,byte *toRead, size_t arrayLen);
       bool ReadRegister(byte addr, byte& outData);
+      bool ResetDevice();
       void lowerChipSelect();
       void raiseChipSelect();
-      void waitForMisoLow();
+      bool waitForMisoLow();
 
     protected:
-#ifndef ARDUINO
-      inline void intializeDefaultTransaction(spi_transaction_t &transToInitialize) { memset(&transToInitialize, 0, sizeof(transToInitialize)); }
-      inline void startTransaction(){}
-      inline void endTransaction(){}
-#else  
-      void startTransaction();
-      void endTransaction();
-    #endif
+      bool transferSelected(const byte *tx, byte *rx, size_t byteCount);
+      bool transfer(const byte *tx, byte *rx, size_t byteCount);
+      bool transferBurst(byte address, const byte *tx, byte *rx, size_t byteCount, byte &status);
   };
 
 }//namespace
