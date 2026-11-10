@@ -38,31 +38,17 @@ namespace
         int8_t offsetSteps;
     };
 
-    static constexpr float          kSomfyCarrierMHz             = 433.42f;
-    static constexpr float          kAlternateCarrierMHz         = 433.92f; // Common 433 MHz ISM carrier used for comparison.
-    // Available CC1101 filter settings with a 26 MHz crystal.
-    static constexpr float          kWideBandwidthKHz            = 270.8333f;
-    static constexpr float          kNarrowBandwidthKHz          = 101.5625f;
-    static constexpr int8_t         kNoFrequencyOffset           = 0;
-    static constexpr int8_t         kSmartRcFrequencyOffsetSteps = 35; // About +55.5 kHz at 26 MHz.
-
-    static constexpr ReceiveProfile kReceiveProfiles[]           = {
-        {kSomfyCarrierMHz, kWideBandwidthKHz, kNoFrequencyOffset},
-        {kAlternateCarrierMHz, kWideBandwidthKHz, kNoFrequencyOffset},
-        {kSomfyCarrierMHz, kNarrowBandwidthKHz, kNoFrequencyOffset},
-        {kSomfyCarrierMHz, kNarrowBandwidthKHz, kSmartRcFrequencyOffsetSteps},
+    static constexpr ReceiveProfile kReceiveProfiles[] = {
+        // Carrier (MHz), filter bandwidth (kHz), frequency offset (synthesizer steps).
+        {433.42f, 270.8333f,  0}, // Working profile from the HiLetGo bench test.
+        {433.92f, 270.8333f,  0}, // Alternate ISM carrier.
+        {433.42f, 101.5625f,  0}, // Narrow filter with no offset.
+        {433.42f, 101.5625f, 35}, // Narrow filter with the SmartRC offset (+55.5 kHz at 26 MHz).
     };
     static constexpr char kFirstProfileKey = '1';
-    static constexpr char kLastProfileKey  = kFirstProfileKey + ARRAYSIZE(kReceiveProfiles) - 1;
-#ifndef SOMFY_LEGACY_RF
-    static constexpr char           kDefaultProfileKey     = kFirstProfileKey; // Profile validated with the HiLetGo and RTS remote.
-    static constexpr ReceiveProfile kDefaultReceiveProfile = kReceiveProfiles[kDefaultProfileKey - kFirstProfileKey];
-#endif
+    static constexpr char kDefaultProfileKey = kFirstProfileKey; // Profile validated with the HiLetGo and RTS remote.
 
-    // An 80-bit Manchester frame can have two edges per bit, plus the preamble.
-    static constexpr unsigned kEdgeQueueDepth       = 256;
     static constexpr unsigned kRssiSampleIntervalMs = 10;    // Sample several times during a short remote burst.
-    static constexpr unsigned kReportIntervalMs     = 2'000; // Group samples into the console's two-second windows.
     static constexpr int      kMinRssiDbm           = -140;  // Below the lowest representable CC1101 RSSI.
 } // namespace
 
@@ -71,7 +57,8 @@ static void     receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edg
 extern "C" void app_main(void)
 {
     static CC1101Device        cc1101Device;
-    const QueueHandle_t        edgeQueue = xQueueCreate(kEdgeQueueDepth, sizeof(uint32_t));
+    // 256 entries accommodate two edges per bit of an 80-bit frame, plus the preamble.
+    const QueueHandle_t        edgeQueue = xQueueCreate(256, sizeof(uint32_t));
     std::shared_ptr<SpiMaster> spiMaster;
     bool                       bRet = true;
     const SpiConfig            spiConfig = {
@@ -83,16 +70,15 @@ extern "C" void app_main(void)
                    .queueSize        = 8,         // Original ESP-IDF device queue depth. Register transfers poll synchronously.
                    .spiMode          = SpiMode::ModeZero,
                    .spiHost          = Esp32SPIHost::HOST_VSPI};
+    const ReceiveProfile &defaultProfile = kReceiveProfiles[kDefaultProfileKey - kFirstProfileKey];
     CC110DeviceConfig somfyRadioConfig = {
         .TxPin = GPIO_NUM_13,
         .RxPin = GPIO_NUM_14,
-#ifndef SOMFY_LEGACY_RF
-        .CarrierFrequencyMHz       = kDefaultReceiveProfile.frequencyMHz,
-        .ReceiveFilterBandwidthKHz = kDefaultReceiveProfile.bandwidthKHz,
-        .FrequencyOffsetSteps      = kDefaultReceiveProfile.offsetSteps,
+        .CarrierFrequencyMHz       = defaultProfile.frequencyMHz,
+        .ReceiveFilterBandwidthKHz = defaultProfile.bandwidthKHz,
+        .FrequencyOffsetSteps      = defaultProfile.offsetSteps,
         .DisableDCFilter           = false,
         .UseSomfyRtsRxProfile      = true,
-#endif
         .InterruptQueue = edgeQueue};
 
     if (!edgeQueue)
@@ -118,11 +104,7 @@ Error:
 static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin)
 {
     bool consoleReady;
-#ifdef SOMFY_LEGACY_RF
-    char activeProfile = 'L';
-#else
     char activeProfile = kDefaultProfileKey;
-#endif
     SomfyReceiver              receiver;
     SomfyReceiver::Frame       frame;
     SomfyReceiver::Diagnostics sample;
@@ -173,7 +155,7 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
         if (now - lastRssiSample >= pdMS_TO_TICKS(kRssiSampleIntervalMs))
         {
             if (consoleReady && read(STDIN_FILENO, &key, sizeof(key)) == sizeof(key) &&
-                key >= kFirstProfileKey && key <= kLastProfileKey)
+                key >= kFirstProfileKey && key < kFirstProfileKey + ARRAYSIZE(kReceiveProfiles))
             {
                 profile = kReceiveProfiles[key - kFirstProfileKey];
                 if (cc1101Device.RetuneReceive(profile.frequencyMHz, profile.bandwidthKHz, profile.offsetSteps))
@@ -198,7 +180,8 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
             peakRssi       = std::max(peakRssi, cc1101Device.ReadRssiDbm());
             lastRssiSample = now;
         }
-        if (now - lastReport >= pdMS_TO_TICKS(kReportIntervalMs))
+        // Report the receiver statistics in two-second windows.
+        if (now - lastReport >= pdMS_TO_TICKS(2'000))
         {
             sample = receiver.TakeDiagnostics();
             ESP_LOGI(TAG, "RX 2s: profile=%c, edges=%" PRIu32 ", peak RSSI=%d dBm, syncs=%u, timing aborts=%u, max bits=%u,"
