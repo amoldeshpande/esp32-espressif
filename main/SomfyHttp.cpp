@@ -52,7 +52,7 @@ bool SomfyHttp::Start(uint64_t nowMs)
     CBR(m_requests != nullptr);
     CBR(m_snapshots != nullptr);
 
-    CBR(m_network.Start(m_controller.GetStatus().address, nowMs));
+    CBR(m_network.Start(m_controller.GetStatus(SomfyController::kFirstBlindId).address, nowMs));
     publish(nowMs);
     server.uri_match_fn      = httpd_uri_match_wildcard;
     // Bound how long an idle client can hold the single HTTP task.
@@ -101,7 +101,7 @@ void SomfyHttp::publish(uint64_t nowMs)
 {
     if (m_snapshots)
     {
-        m_snapshot.blind     = m_controller.GetStatus();
+        m_snapshot.blinds    = m_controller.GetBlinds();
         m_snapshot.discovery = m_controller.GetDiscovery(nowMs);
         xQueueOverwrite(m_snapshots, &m_snapshot);
     }
@@ -110,7 +110,7 @@ void SomfyHttp::publish(uint64_t nowMs)
 void SomfyHttp::Poll(uint64_t nowMs)
 {
     Request    request;
-    Completion completion{SomfyController::Result::NotSent, false};
+    Completion completion{SomfyController::Result::NotSent, nullptr, 0};
 
     if (m_server)
     {
@@ -120,14 +120,24 @@ void SomfyHttp::Poll(uint64_t nowMs)
     {
         if (m_network.GetStatus().mode == SomfyNetwork::Mode::Online)
         {
-            if (request.operation == Operation::Discovery)
+            switch (request.operation)
             {
-                m_controller.StartDiscovery(nowMs);
-                completion.discoveryStarted = true;
-            }
-            else
-            {
-                completion.result = m_controller.Send(request.command);
+                case Operation::Discovery:
+                    m_controller.StartDiscovery(nowMs);
+                    completion.setupResult = "discovery_started";
+                    break;
+                case Operation::CreateBlind:
+                    completion.blindId     = m_controller.AddBlind(request.name);
+                    completion.setupResult = completion.blindId ? "blind_created" : "blind_create_failed";
+                    break;
+                case Operation::ConfirmPairing:
+                    completion.setupResult = m_controller.ConfirmPairing(request.blindId)
+                                                 ? "pairing_confirmed"
+                                                 : "confirmation_rejected";
+                    break;
+                case Operation::Command:
+                    completion.result = m_controller.Send(request.blindId, request.command);
+                    break;
             }
         }
         m_snapshot.completions[request.id % m_snapshot.completions.size()] = completion;
@@ -310,11 +320,19 @@ Error:
     return sendJson(request, status, response);
 }
 
-static esp_err_t sendRequestResult(httpd_req_t *request, uint32_t id, const char *result)
+static esp_err_t sendRequestResult(httpd_req_t *request, uint32_t id, const char *result, uint32_t blindId)
 {
     char body[96]; // Request ID and result name as JSON.
 
-    snprintf(body, sizeof(body), R"({"requestId":%)" PRIu32 R"(,"result":"%s"})", id, result);
+    if (blindId)
+    {
+        snprintf(body, sizeof(body), R"({"requestId":%)" PRIu32 R"(,"result":"%s","blindId":%)" PRIu32 "}",
+                 id, result, blindId);
+    }
+    else
+    {
+        snprintf(body, sizeof(body), R"({"requestId":%)" PRIu32 R"(,"result":"%s"})", id, result);
+    }
     return sendJson(request, "200 OK", body);
 }
 
@@ -348,7 +366,7 @@ esp_err_t SomfyHttp::getRequest(httpd_req_t *request, const char *suffix, const 
     }
     else if (id > snapshot.lastCompletedId)
     {
-        result = sendRequestResult(request, id, "pending");
+        result = sendRequestResult(request, id, "pending", 0);
     }
     else if (snapshot.lastCompletedId - id >= snapshot.completions.size())
     {
@@ -357,9 +375,9 @@ esp_err_t SomfyHttp::getRequest(httpd_req_t *request, const char *suffix, const 
     else
     {
         completion = &snapshot.completions[id % snapshot.completions.size()];
-        if (completion->discoveryStarted)
+        if (completion->setupResult)
         {
-            outcome = "discovery_started";
+            outcome = completion->setupResult;
         }
         else
         {
@@ -378,8 +396,67 @@ esp_err_t SomfyHttp::getRequest(httpd_req_t *request, const char *suffix, const 
                     break;
             }
         }
-        result = sendRequestResult(request, id, outcome);
+        result = sendRequestResult(request, id, outcome, completion->blindId);
     }
+    return result;
+}
+
+static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds &blinds)
+{
+    bool                           bRet = true;
+    cJSON                         *list = cJSON_CreateArray();
+    cJSON                         *item;
+    char                          *json = nullptr;
+    char                           address[sizeof("FFFFFF")];
+    const char                    *pairing;
+    const SomfyController::Status *blind;
+    esp_err_t                      result;
+
+    CBR(list != nullptr);
+    for (uint32_t id = 1; id <= blinds.size(); ++id)
+    {
+        blind = &blinds[id - 1];
+        if (blind->address == 0)
+        {
+            continue;
+        }
+        item = cJSON_CreateObject();
+        CBR(item != nullptr);
+        if (!cJSON_AddItemToArray(list, item))
+        {
+            cJSON_Delete(item);
+            CBR(false);
+        }
+        snprintf(address, sizeof(address), "%06" PRIX32, blind->address);
+        pairing = "unpaired";
+        if (blind->pairing == SomfyController::Pairing::AwaitingConfirmation)
+        {
+            pairing = "awaiting_confirmation";
+        }
+        else if (blind->pairing == SomfyController::Pairing::Paired)
+        {
+            pairing = "paired";
+        }
+        CBR(cJSON_AddNumberToObject(item, "id", id));
+        CBR(cJSON_AddStringToObject(item, "name", blind->name));
+        CBR(cJSON_AddStringToObject(item, "address", address));
+        CBR(cJSON_AddStringToObject(item, "pairing", pairing));
+        CBR(cJSON_AddBoolToObject(item, "ready", blind->ready));
+    }
+    json = cJSON_PrintUnformatted(list);
+    CBR(json != nullptr);
+
+Error:
+    if (bRet)
+    {
+        result = sendJson(request, "200 OK", json);
+    }
+    else
+    {
+        result = sendJson(request, "500 Internal Server Error", R"({"error":"blind_list_unavailable"})");
+    }
+    cJSON_free(json);
+    cJSON_Delete(list);
     return result;
 }
 
@@ -394,9 +471,7 @@ esp_err_t SomfyHttp::get(httpd_req_t *request)
     xQueuePeek(m_snapshots, &snapshot, 0);
     if (strcmp(request->uri, "/api/blinds") == 0)
     {
-        snprintf(body, sizeof(body), R"([{"id":1,"address":"%06)" PRIX32 R"(","ready":%s}])",
-                 snapshot.blind.address, snapshot.blind.ready ? "true" : "false");
-        result = sendJson(request, "200 OK", body);
+        result = sendBlinds(request, snapshot.blinds);
     }
     else if (strncmp(request->uri, requestPrefix, sizeof(requestPrefix) - 1) == 0)
     {
@@ -432,46 +507,95 @@ esp_err_t SomfyHttp::get(httpd_req_t *request)
     return result;
 }
 
+static bool parseBlindPath(const char *path, uint32_t &id, const char *&action)
+{
+    bool                   bRet     = true;
+    const char             prefix[] = "/api/blinds/";
+    const char            *start;
+    const char            *slash;
+    std::from_chars_result parsed{};
+
+    CBR(strncmp(path, prefix, sizeof(prefix) - 1) == 0);
+    start = path + sizeof(prefix) - 1;
+    slash = strchr(start, '/');
+    CBR(slash != nullptr);
+    parsed = std::from_chars(start, slash, id);
+    CBR(parsed.ec == std::errc{} && parsed.ptr == slash && id != 0);
+    action = slash + 1;
+
+Error:
+    return bRet;
+}
+
 esp_err_t SomfyHttp::post(httpd_req_t *request)
 {
     bool         bRet = true;
     Request      pending{};
     const char  *status   = "400 Bad Request";
     const char  *response = R"({"error":"invalid_command"})";
-    char         body[81]{}; // A short JSON command object, plus its terminator.
+    char         body[256]; // A 32-byte name can expand to six JSON characters per byte.
     cJSON       *json = nullptr;
-    const cJSON *command;
+    const cJSON *field;
+    const char  *action;
+    Snapshot     snapshot{};
 
     if (strcmp(request->uri, "/api/discovery") == 0)
     {
         pending.operation = Operation::Discovery;
         CBR(request->content_len == 0);
     }
-    else if (strcmp(request->uri, "/api/blinds/1/commands") == 0)
+    else if (strcmp(request->uri, "/api/blinds") == 0)
     {
-        pending.operation = Operation::Command;
+        pending.operation = Operation::CreateBlind;
+        response          = R"({"error":"invalid_blind_name"})";
         json              = readJson(request, body, sizeof(body));
-        command           = cJSON_GetObjectItemCaseSensitive(json, "command");
-        CBR(cJSON_IsString(command));
-        if (strcmp(command->valuestring, "open") == 0)
-        {
-            pending.command = SomfyController::Command::Open;
-        }
-        else if (strcmp(command->valuestring, "close") == 0)
-        {
-            pending.command = SomfyController::Command::Close;
-        }
-        else
-        {
-            CBR(strcmp(command->valuestring, "my") == 0 || strcmp(command->valuestring, "stop") == 0);
-            pending.command = SomfyController::Command::My;
-        }
+        field             = cJSON_GetObjectItemCaseSensitive(json, "name");
+        CBR(cJSON_IsString(field));
+        CBR(field->valuestring[0] && strlen(field->valuestring) < sizeof(pending.name));
+        memcpy(pending.name, field->valuestring, strlen(field->valuestring));
     }
     else
     {
         status   = "404 Not Found";
-        response = R"({"error":"unknown_path"})";
-        CBR(false);
+        response = R"({"error":"unknown_blind_or_path"})";
+        CBR(parseBlindPath(request->uri, pending.blindId, action));
+        xQueuePeek(m_snapshots, &snapshot, 0);
+        CBR(pending.blindId <= snapshot.blinds.size());
+        CBR(snapshot.blinds[pending.blindId - 1].address != 0);
+        if (strcmp(action, "commands") == 0)
+        {
+            pending.operation = Operation::Command;
+            status            = "400 Bad Request";
+            response          = R"({"error":"invalid_command"})";
+            json              = readJson(request, body, sizeof(body));
+            field             = cJSON_GetObjectItemCaseSensitive(json, "command");
+            CBR(cJSON_IsString(field));
+            if (strcmp(field->valuestring, "open") == 0)
+            {
+                pending.command = SomfyController::Command::Open;
+            }
+            else if (strcmp(field->valuestring, "close") == 0)
+            {
+                pending.command = SomfyController::Command::Close;
+            }
+            else
+            {
+                CBR(strcmp(field->valuestring, "my") == 0 || strcmp(field->valuestring, "stop") == 0);
+                pending.command = SomfyController::Command::My;
+            }
+        }
+        else if (strcmp(action, "pair") == 0 || strcmp(action, "confirm") == 0)
+        {
+            status   = "400 Bad Request";
+            response = R"({"error":"unexpected_body"})";
+            CBR(request->content_len == 0);
+            pending.operation = strcmp(action, "pair") == 0 ? Operation::Command : Operation::ConfirmPairing;
+            pending.command   = SomfyController::Command::Program;
+        }
+        else
+        {
+            CBR(false);
+        }
     }
 
     status   = "503 Service Unavailable";

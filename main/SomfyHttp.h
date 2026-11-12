@@ -23,7 +23,8 @@
 class SomfyHttp final
 {
   public:
-    explicit SomfyHttp(SomfyController &controller) : m_controller(controller) {}
+    explicit SomfyHttp(SomfyController &controller)
+        : m_controller(controller) {}
     bool Start(uint64_t nowMs);
     // Called by the radio task to service queued work and refresh HTTP snapshots.
     void Poll(uint64_t nowMs);
@@ -32,24 +33,29 @@ class SomfyHttp final
     enum class Operation : uint8_t
     {
         Command,
-        Discovery
+        Discovery,
+        CreateBlind,
+        ConfirmPairing
     };
     struct Request
     {
         uint32_t                 id;
         Operation                operation;
         SomfyController::Command command;
+        uint32_t                 blindId;
+        char                     name[sizeof(SomfyController::Status::name)];
     };
 
     struct Completion
     {
         SomfyController::Result result;
-        bool                    discoveryStarted;
+        const char             *setupResult; // Static result text for discovery and registry requests.
+        uint32_t                blindId;
     };
 
     struct Snapshot
     {
-        SomfyController::Status    blind;
+        SomfyController::Blinds    blinds;
         SomfyController::Discovery discovery;
         // Keep the latest 16 completed requests in RAM. Only the radio task writes these.
         std::array<Completion, 16> completions;
@@ -62,7 +68,7 @@ class SomfyHttp final
     esp_err_t        post(httpd_req_t *request);
     esp_err_t        networkRequest(httpd_req_t *request);
 
-    void publish(uint64_t nowMs);
+    void             publish(uint64_t nowMs);
 
     SomfyController &m_controller;
     QueueHandle_t    m_requests  = nullptr;

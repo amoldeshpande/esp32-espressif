@@ -16,14 +16,17 @@
 #include "SomfyReceiver.h"
 #include "SomfyTransmitter.h"
 
-// Owns command execution for the paired bench blind. Call on the radio task,
+// Owns command execution for saved blinds. Call on the radio task,
 // with the radio initialized on the transmit profile before constructing this module.
 class SomfyController final
 {
   public:
-    using Command = SomfyTransmitter::Command;
-    using Result  = SomfyTransmitter::Result;
-    using Status  = SomfyTransmitter::Status;
+    using Command                           = SomfyTransmitter::Command;
+    using Result                            = SomfyTransmitter::Result;
+    using Status                            = SomfyTransmitter::Status;
+    using Blinds                            = SomfyTransmitter::Blinds;
+    using Pairing                           = SomfyTransmitter::Pairing;
+    static constexpr uint32_t kFirstBlindId = 1; // Legacy serial controls and Wi-Fi setup identity.
 
     struct Remote
     {
@@ -44,15 +47,18 @@ class SomfyController final
 
     explicit SomfyController(TI_CC1101::CC1101Device &radio)
         : m_radio(radio) {}
-    bool      Init(gpio_num_t txPin);
-    bool      RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps, bool transmitProfile);
-    Result    Send(Command command);
-    Status    GetStatus() const;
-    SomfyReceiver::Result OnEdge(uint32_t timestamp, SomfyReceiver::Frame &frame);
+    bool                       Init(gpio_num_t txPin);
+    bool                       RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps, bool transmitProfile);
+    uint32_t                   AddBlind(const char *name);
+    bool                       ConfirmPairing(uint32_t id);
+    Result                     Send(uint32_t id, Command command);
+    Status                     GetStatus(uint32_t id) const;
+    Blinds                     GetBlinds() const;
+    SomfyReceiver::Result      OnEdge(uint32_t timestamp, SomfyReceiver::Frame &frame);
     SomfyReceiver::Diagnostics TakeDiagnostics();
-    void      StartDiscovery(uint64_t nowMs);
-    bool      ObserveRemote(const Remote &remote, uint64_t nowMs);
-    Discovery GetDiscovery(uint64_t nowMs) const;
+    void                       StartDiscovery(uint64_t nowMs);
+    bool                       ObserveRemote(const Remote &remote, uint64_t nowMs);
+    Discovery                  GetDiscovery(uint64_t nowMs) const;
 
   private:
     TI_CC1101::CC1101Device &m_radio;

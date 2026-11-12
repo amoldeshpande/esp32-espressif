@@ -151,7 +151,7 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
     if (consoleReady)
     {
         ESP_LOGI(TAG, "Keys: 1=433.42 wide, 2=433.92 wide, 3=433.42 narrow, 4=433.42 narrow +55.5 kHz");
-        ESP_LOGI(TAG, "TX keys (profile 1): p=program/pair, o=open, c=close, m=My/stop, i=virtual remote status");
+        ESP_LOGI(TAG, "TX keys (profile 1): p=program/pair, y=confirm pairing, o=open, c=close, m=My/stop, i=virtual remote status");
     }
     else
     {
@@ -252,6 +252,17 @@ static void processTransmitKey(SomfyController &controller, char key)
         case 'm':
             command = SomfyController::Command::My;
             break;
+        case 'y':
+            if (controller.ConfirmPairing(SomfyController::kFirstBlindId))
+            {
+                ESP_LOGI(TAG, "Blind 1 pairing confirmed");
+            }
+            else
+            {
+                ESP_LOGE(TAG, "No pending pairing could be confirmed");
+            }
+            selected = false;
+            break;
         case 'i':
             logTransmitStatus(controller);
             selected = false;
@@ -262,7 +273,7 @@ static void processTransmitKey(SomfyController &controller, char key)
     }
     if (selected)
     {
-        switch (controller.Send(command))
+        switch (controller.Send(SomfyController::kFirstBlindId, command))
         {
             case SomfyController::Result::NotSent:
                 ESP_LOGE(TAG, "Command was not transmitted. Check TX status with i.");
@@ -281,7 +292,7 @@ static void processTransmitKey(SomfyController &controller, char key)
 
 static void logTransmitStatus(const SomfyController &controller)
 {
-    const SomfyController::Status status = controller.GetStatus();
+    const SomfyController::Status status = controller.GetStatus(SomfyController::kFirstBlindId);
 
     ESP_LOGI(TAG, "Virtual remote=%06" PRIX32 ", next rolling=%" PRIu32 ", TX %s",
              status.address, status.nextCode, status.ready ? "ready" : "disabled");

@@ -25,7 +25,7 @@ bool SomfyController::RetuneReceive(float frequencyMHz, float bandwidthKHz, int8
 {
     bool bRet         = true;
 
-    m_receiver = {};
+    m_receiver        = {};
     m_transmitProfile = false;
     CBR(m_radio.RetuneReceive(frequencyMHz, bandwidthKHz, offsetSteps));
     m_transmitProfile = transmitProfile;
@@ -34,24 +34,48 @@ Error:
     return bRet;
 }
 
-SomfyController::Result SomfyController::Send(Command command)
+uint32_t SomfyController::AddBlind(const char *name)
+{
+    return m_transmitter.AddBlind(name);
+}
+
+bool SomfyController::ConfirmPairing(uint32_t id)
+{
+    return m_transmitter.ConfirmPairing(id);
+}
+
+SomfyController::Result SomfyController::Send(uint32_t id, Command command)
 {
     Result result = Result::NotSent;
 
     if (m_transmitProfile)
     {
-        result = m_transmitter.Send(m_radio, command);
+        result     = m_transmitter.Send(m_radio, id, command);
         m_receiver = {};
     }
     return result;
 }
 
-SomfyController::Status SomfyController::GetStatus() const
+SomfyController::Status SomfyController::GetStatus(uint32_t id) const
 {
-    Status status = m_transmitter.GetStatus();
+    Status status = m_transmitter.GetStatus(id);
 
     status.ready  = status.ready && m_transmitProfile;
     return status;
+}
+
+SomfyController::Blinds SomfyController::GetBlinds() const
+{
+    Blinds blinds = m_transmitter.GetBlinds();
+
+    if (!m_transmitProfile)
+    {
+        for (Status &blind : blinds)
+        {
+            blind.ready = false;
+        }
+    }
+    return blinds;
 }
 
 void SomfyController::StartDiscovery(uint64_t nowMs)
@@ -109,7 +133,6 @@ SomfyController::Discovery SomfyController::GetDiscovery(uint64_t nowMs) const
     discovery.active    = discoveryActive(nowMs);
     return discovery;
 }
-
 
 SomfyReceiver::Result SomfyController::OnEdge(uint32_t timestamp, SomfyReceiver::Frame &frame)
 {
