@@ -1,6 +1,3 @@
-update 11/2026: With the help of AI (OpenAI codex), I was able to get the radio working with my Somfy blinds.
-
------------------------------------------------------------------------------------------------------------------
 This was an attempt to implement a nice CC1101 driver library for my Somfy blinds, using  ESP-IDF. An attempt was also made with Arduino ,but I could not get a CC1101 to receive data using this code, so I eventually gave up. 
 
 

@@ -1,0 +1,62 @@
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+#pragma once
+
+#include "SomfyTransmitter.h"
+
+// Owns command execution for the paired bench blind. Call on the radio task,
+// with the radio initialized on the transmit profile before constructing this module.
+class SomfyController final
+{
+  public:
+    using Command = SomfyTransmitter::Command;
+    using Result  = SomfyTransmitter::Result;
+    using Status  = SomfyTransmitter::Status;
+
+    struct Remote
+    {
+        uint32_t address;
+        unsigned command;
+        unsigned rollingCode;
+        unsigned bitCount;
+    };
+
+    struct Discovery
+    {
+        // Bound storage for nearby transmitters. Further distinct addresses set overflow.
+        std::array<Remote, 16> remotes{};
+        unsigned               count    = 0;
+        bool                   active   = false;
+        bool                   overflow = false;
+    };
+
+    explicit SomfyController(TI_CC1101::CC1101Device &radio)
+        : m_radio(radio) {}
+    bool      Init(gpio_num_t txPin);
+    bool      RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps, bool transmitProfile);
+    Result    Send(Command command);
+    Status    GetStatus() const;
+    void      StartDiscovery(uint64_t nowMs);
+    bool      ObserveRemote(const Remote &remote, uint64_t nowMs);
+    Discovery GetDiscovery(uint64_t nowMs) const;
+
+  private:
+    TI_CC1101::CC1101Device &m_radio;
+    SomfyTransmitter         m_transmitter;
+    bool                     m_transmitProfile = true;
+    Discovery                m_discovery;
+    uint64_t                 m_discoveryStartMs = 0;
+
+    bool                     discoveryActive(uint64_t nowMs) const;
+};

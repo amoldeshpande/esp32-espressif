@@ -19,12 +19,15 @@
 #include <memory>
 #include <unistd.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
 #include <CC1101Lib/CC1101Device.h>
 #include <CC1101Lib/SpiMaster.h>
 #include "SomfyReceiver.h"
+#include "SomfyController.h"
+#include "SomfyHttp.h"
 
 static const char *TAG = "main";
 using namespace TI_CC1101;
@@ -52,7 +55,10 @@ namespace
     static constexpr int      kMinRssiDbm           = -140;  // Below the lowest representable CC1101 RSSI.
 } // namespace
 
-static void     receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin);
+static void     processTransmitKey(SomfyController &controller, char key);
+static uint64_t monotonicMs();
+static void     logTransmitStatus(const SomfyController &controller);
+static void     receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin, gpio_num_t txPin);
 
 extern "C" void app_main(void)
 {
@@ -91,7 +97,7 @@ extern "C" void app_main(void)
     CBRA(spiMaster->Init(spiConfig));
     CBRA(cc1101Device.Init(spiMaster, somfyRadioConfig));
     CBRA(cc1101Device.BeginReceive());
-    receiveSomfyFrames(cc1101Device, edgeQueue, somfyRadioConfig.RxPin);
+    receiveSomfyFrames(cc1101Device, edgeQueue, somfyRadioConfig.RxPin, somfyRadioConfig.TxPin);
 
 Error:
     if (!bRet && edgeQueue)
@@ -101,11 +107,13 @@ Error:
     }
 }
 
-static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin)
+static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin, gpio_num_t txPin)
 {
     bool consoleReady;
     char activeProfile = kDefaultProfileKey;
     SomfyReceiver              receiver;
+    SomfyController            controller(cc1101Device);
+    static SomfyHttp           http;
     SomfyReceiver::Frame       frame;
     SomfyReceiver::Diagnostics sample;
     ReceiveProfile             profile;
@@ -119,11 +127,21 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
     int                        peakRssi = kMinRssiDbm;
     char                       key;
 
+    if (!controller.Init(txPin))
+    {
+        ESP_LOGE(TAG, "Transmit setup failed; continuing with reception only");
+    }
+    logTransmitStatus(controller);
+    if (!http.Start(controller, monotonicMs()))
+    {
+        ESP_LOGE(TAG, "Continuing with serial control");
+    }
     ESP_LOGI(TAG, "Listening for Somfy RTS on GPIO%d", rxPin);
     consoleReady = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) != -1;
     if (consoleReady)
     {
         ESP_LOGI(TAG, "Keys: 1=433.42 wide, 2=433.92 wide, 3=433.42 narrow, 4=433.42 narrow +55.5 kHz");
+        ESP_LOGI(TAG, "TX keys (profile 1): p=program/pair, o=open, c=close, m=My/stop, i=virtual remote status");
     }
     else
     {
@@ -141,6 +159,11 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
                 if (SomfyReceiver::DecodeBase(frame))
                 {
                     ++frameCount;
+                    if (controller.ObserveRemote({frame.RemoteAddress(), frame.Command(), frame.RollingCode(), frame.bitCount},
+                                                 monotonicMs()))
+                    {
+                        http.Publish(controller, monotonicMs());
+                    }
                     ESP_LOGI(TAG, "RTS %u-bit frame, base checksum OK, remote=%06" PRIX32 " command=%u rolling=%u",
                              frame.bitCount, frame.RemoteAddress(), frame.Command(), frame.RollingCode());
                 }
@@ -154,21 +177,29 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
         now = xTaskGetTickCount();
         if (now - lastRssiSample >= pdMS_TO_TICKS(kRssiSampleIntervalMs))
         {
-            if (consoleReady && read(STDIN_FILENO, &key, sizeof(key)) == sizeof(key) &&
-                key >= kFirstProfileKey && key < kFirstProfileKey + ARRAYSIZE(kReceiveProfiles))
+            if (consoleReady && read(STDIN_FILENO, &key, sizeof(key)) == sizeof(key))
             {
-                profile = kReceiveProfiles[key - kFirstProfileKey];
-                if (cc1101Device.RetuneReceive(profile.frequencyMHz, profile.bandwidthKHz, profile.offsetSteps))
+                if (key >= kFirstProfileKey && key < kFirstProfileKey + ARRAYSIZE(kReceiveProfiles))
                 {
-                    activeProfile = key;
-                    ESP_LOGI(TAG, "RX profile %c: %.3f MHz, %.2f kHz BW, offset steps=%d",
-                             key, profile.frequencyMHz, profile.bandwidthKHz, profile.offsetSteps);
+                    profile = kReceiveProfiles[key - kFirstProfileKey];
+                    if (controller.RetuneReceive(profile.frequencyMHz, profile.bandwidthKHz, profile.offsetSteps,
+                                                 key == kDefaultProfileKey))
+                    {
+                        activeProfile = key;
+                        ESP_LOGI(TAG, "RX profile %c: %.3f MHz, %.2f kHz BW, offset steps=%d",
+                                 key, profile.frequencyMHz, profile.bandwidthKHz, profile.offsetSteps);
+                    }
+                    else
+                    {
+                        activeProfile = '?';
+                        ESP_LOGE(TAG, "Failed to set RX profile %c", key);
+                    }
                 }
                 else
                 {
-                    activeProfile = '?';
-                    ESP_LOGE(TAG, "Failed to set RX profile %c", key);
+                    processTransmitKey(controller, key);
                 }
+                // The decoder must not interpret a retune or TX pause as an incoming pulse.
                 receiver         = {};
                 edgeCount        = 0;
                 frameCount       = 0;
@@ -176,6 +207,12 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
                 peakRssi         = kMinRssiDbm;
                 now              = xTaskGetTickCount();
                 lastReport       = now;
+                http.Publish(controller, monotonicMs());
+            }
+            if (http.ProcessRequest(controller, monotonicMs()))
+            {
+                receiver = {};
+                now = xTaskGetTickCount();
             }
             peakRssi       = std::max(peakRssi, cc1101Device.ReadRssiDbm());
             lastRssiSample = now;
@@ -183,6 +220,7 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
         // Report the receiver statistics in two-second windows.
         if (now - lastReport >= pdMS_TO_TICKS(2'000))
         {
+            http.Publish(controller, monotonicMs());
             sample = receiver.TakeDiagnostics();
             ESP_LOGI(TAG, "RX 2s: profile=%c, edges=%" PRIu32 ", peak RSSI=%d dBm, syncs=%u, timing aborts=%u, max bits=%u,"
                           " checksum OK=%" PRIu32 ", checksum failed=%" PRIu32,
@@ -195,4 +233,64 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
             lastReport       = now;
         }
     }
+}
+
+static void processTransmitKey(SomfyController &controller, char key)
+{
+    SomfyController::Command command = SomfyController::Command::My;
+    bool                     selected = true;
+
+    switch (key)
+    {
+        case 'p':
+            command = SomfyController::Command::Program;
+            break;
+        case 'o':
+            command = SomfyController::Command::Open;
+            break;
+        case 'c':
+            command = SomfyController::Command::Close;
+            break;
+        case 'm':
+            command = SomfyController::Command::My;
+            break;
+        case 'i':
+            logTransmitStatus(controller);
+            selected = false;
+            break;
+        default:
+            selected = false;
+            break;
+    }
+    if (selected)
+    {
+        switch (controller.Send(command))
+        {
+            case SomfyController::Result::NotSent:
+                ESP_LOGE(TAG, "Command was not transmitted. Check TX status with i.");
+                break;
+            case SomfyController::Result::TransmissionUncertain:
+                ESP_LOGE(TAG, "Transmission incomplete. Check the blind before retrying.");
+                break;
+            case SomfyController::Result::TransmittedWithCleanupError:
+                ESP_LOGE(TAG, "Command transmitted, but radio cleanup failed");
+                break;
+            case SomfyController::Result::Transmitted:
+                break;
+        }
+    }
+}
+
+static void logTransmitStatus(const SomfyController &controller)
+{
+    const SomfyController::Status status = controller.GetStatus();
+
+    ESP_LOGI(TAG, "Virtual remote=%06" PRIX32 ", next rolling=%" PRIu32 ", TX %s",
+             status.address, status.nextCode, status.ready ? "ready" : "disabled");
+}
+
+
+static uint64_t monotonicMs()
+{
+    return static_cast<uint64_t>(esp_timer_get_time()) / 1'000; // Convert microseconds to milliseconds.
 }

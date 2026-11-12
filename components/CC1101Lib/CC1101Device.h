@@ -84,6 +84,8 @@ namespace TI_CC1101
         bool Init(std::shared_ptr<SpiMaster> &spiMaster, CC110DeviceConfig &deviceConfig);
         void Reset();
         bool BeginReceive();
+        bool BeginTransmit();
+        bool EndTransmit();
         void Update();
         int ReadRssiDbm();
         bool RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps);
@@ -106,6 +108,7 @@ namespace TI_CC1101
 
       protected:
         bool               enableReceiveMode();
+        bool               waitForState(byte expectedState);
         bool               verifyAsyncConfiguration();
         void               delayMilliseconds(int millis);
         [[nodiscard]] byte readRegister(byte address);

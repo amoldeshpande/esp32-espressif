@@ -241,6 +241,58 @@ namespace TI_CC1101
         }
         return bRet;
     }
+    bool CC1101Device::waitForState(byte expectedState)
+    {
+        bool bRet = false;
+
+        for (unsigned elapsedUs = 0; elapsedUs < kStateTimeoutUs; elapsedUs += kStatePollIntervalUs)
+        {
+            if ((readRegister(CC1101_CONFIG::MARCSTATE) & kMarcStateMask) == expectedState)
+            {
+                bRet = true;
+                break;
+            }
+            delayMicroseconds(kStatePollIntervalUs);
+        }
+        if (!bRet)
+        {
+            ESP_LOGE(TAG, "Radio state timeout: expected=0x%02X", expectedState);
+        }
+        return bRet;
+    }
+
+    bool CC1101Device::BeginTransmit()
+    {
+        bool bRet   = true;
+        byte status = 0;
+
+        CBR(m_deviceConfig.PacketFmt == PacketFormat::AsyncSerialMode);
+        CER(gpio_intr_disable(m_deviceConfig.RxPin));
+        CBR(m_spiMaster->WriteByte(CC1101_CONFIG::SIDLE, status));
+        CBR(waitForState(kMarcStateIdle));
+        CBR(m_spiMaster->WriteByte(CC1101_CONFIG::STX, status));
+        // MARCSTATE 0x13 is TX; wait through synthesizer calibration before pulsing GDO0.
+        CBR(waitForState(0x13));
+
+    Error:
+        return bRet;
+    }
+
+    bool CC1101Device::EndTransmit()
+    {
+        bool bRet   = true;
+        byte status = 0;
+
+        CBR(m_spiMaster->WriteByte(CC1101_CONFIG::SIDLE, status));
+        CBR(waitForState(kMarcStateIdle));
+        CBR(enableReceiveMode());
+        xQueueReset(m_ISRQueueHandle);
+        CER(gpio_intr_enable(m_deviceConfig.RxPin));
+
+    Error:
+        return bRet;
+    }
+
     void CC1101Device::Update()
     {
         uint32_t ignore = 0;
@@ -1105,7 +1157,9 @@ namespace TI_CC1101
                 break;
             case PacketFormat::AsyncSerialMode:
                 {
-                    statusCode = writeRegister(CC1101_CONFIG::IOCFG0, (byte)ConfigValues::GDx_CFG_LowerSixBits::SERIAL_DATA_OUTPUT);
+                    // Leave GDO0 high impedance in RX so the ESP32 may drive asynchronous TX data.
+                    // IOCFG0=0x2E selects three-state; STX makes GDO0 the serial data input.
+                    statusCode = writeRegister(CC1101_CONFIG::IOCFG0, 0x2E);
                     handleCommonStatusCodes(statusCode, false);
                     statusCode = writeRegister(CC1101_CONFIG::IOCFG2, (byte)ConfigValues::GDx_CFG_LowerSixBits::SERIAL_DATA_OUTPUT);
                     handleCommonStatusCodes(statusCode, false);

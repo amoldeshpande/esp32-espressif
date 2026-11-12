@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Somfy</title>
+<style>
+  :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+  body { margin: 2rem auto; max-width: 42rem; padding: 0 1rem; }
+  section { border-top: 1px solid GrayText; margin-top: 1.5rem; padding-top: 1rem; }
+  h1, h2 { margin: 0 0 .8rem; }
+  input, button { font: inherit; padding: .5rem .7rem; }
+  label { display: block; margin: .7rem 0; }
+  label input { display: block; width: min(100%, 23rem); box-sizing: border-box; }
+  output { display: block; margin-top: .7rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+</style>
+<main>
+  <h1>Somfy</h1>
+  <p id="network" role="status">Connecting to the ESP32…</p>
+  <p><a id="lan" hidden></a></p>
+  <section id="setup" hidden>
+    <h2>Join Wi-Fi</h2>
+    <form id="join">
+      <label>Network name (SSID)<input id="ssid" required maxlength="32" autocomplete="off"></label>
+      <label>Wi-Fi password<input id="password" type="password" maxlength="64" autocomplete="off"></label>
+      <button id="join-button">Join network</button>
+    </form>
+  </section>
+  <div id="online" hidden>
+    <section>
+      <h2>Paired blind</h2>
+      <p id="blind"></p>
+      <div class="controls">
+        <button type="button" data-command="open">Open</button>
+        <button type="button" data-command="close">Close</button>
+        <button type="button" data-command="stop">My / Stop</button>
+      </div>
+    </section>
+    <section>
+      <h2>Remote discovery</h2>
+      <button id="scan" type="button">Start 30-second scan</button>
+      <p id="scan-status"></p>
+      <ul id="remotes"></ul>
+    </section>
+    <section>
+      <h2>Wi-Fi</h2>
+      <button id="reopen" type="button">Reopen Wi-Fi setup</button>
+    </section>
+  </div>
+  <output id="result" aria-live="polite"></output>
+</main>
+<script>
+  const byId = id => document.getElementById(id);
+  const commands = Array.from(document.querySelectorAll('[data-command]'));
+  let busy = false;
+  let refreshing = false;
+  let reopening = false;
+  let ready = false;
+  let setupSsid = '';
+
+  async function api(path, options) {
+    const response = await fetch('/api' + path, {
+      ...options, cache: 'no-store', signal: AbortSignal.timeout(4000)
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'HTTP ' + response.status);
+    return data;
+  }
+
+  function updateButtons() {
+    byId('join-button').disabled = busy;
+    byId('scan').disabled = busy;
+    byId('reopen').disabled = busy;
+    commands.forEach(button => { button.disabled = busy || !ready; });
+  }
+
+  async function readControls() {
+    const [blind] = await api('/blinds', {});
+    ready = Boolean(blind?.ready);
+    byId('blind').textContent = blind
+      ? 'Virtual remote ' + blind.address + (ready ? ' is ready.' : ' is unavailable.')
+      : 'No paired blind listed.';
+    const scan = await api('/discovery', {});
+    byId('scan-status').textContent = scan.active ? 'Listening. Press a button on the physical remote.' :
+      scan.remotes.length ? 'Scan complete.' : 'No remotes found.';
+    if (scan.overflow) byId('scan-status').textContent += ' The remote list is full.';
+    byId('remotes').replaceChildren(...scan.remotes.map(remote => {
+      const row = document.createElement('li');
+      row.textContent = remote.address + ' · ' + remote.bits + '-bit RTS · command ' + remote.command;
+      return row;
+    }));
+  }
+
+  async function refresh() {
+    const state = await api('/network', {});
+    setupSsid = state.setupSsid;
+    byId('setup').hidden = state.mode !== 'setup';
+    byId('online').hidden = state.mode !== 'online';
+    const messages = {
+      setup: state.error === 'join_failed' ? 'Could not join Wi-Fi. Check the network name and password.' :
+        state.error === 'save_failed' ? 'Connected, but the ESP32 could not save the network.' : 'Choose your home Wi-Fi network.',
+      joining: 'Joining Wi-Fi…',
+      joined: 'Wi-Fi connected. Switch to your home network and open the address below.',
+      online: 'Connected to Wi-Fi.',
+      reopening: 'Join ' + setupSsid + ' and open http://192.168.4.1/.',
+      unavailable: 'Wi-Fi setup is unavailable.'
+    };
+    byId('network').textContent = messages[state.mode] || 'Wi-Fi status unavailable.';
+    const link = byId('lan');
+    link.hidden = state.mode !== 'joined';
+    if (state.mode === 'joined') {
+      link.href = 'http://' + state.address + '/';
+      link.textContent = link.href;
+    }
+    if (state.mode === 'online') await readControls();
+    updateButtons();
+  }
+
+  async function poll() {
+    if (!busy && !refreshing && !reopening) {
+      refreshing = true;
+      try { await refresh(); }
+      catch {
+        if (byId('lan').hidden) byId('network').textContent = 'Waiting for the ESP32…';
+      }
+      finally { refreshing = false; }
+    }
+  }
+
+  async function run(action) {
+    if (busy) return;
+    busy = true;
+    byId('result').textContent = '';
+    updateButtons();
+    try { await action(); }
+    catch (error) { byId('result').textContent = error.message; }
+    finally {
+      busy = false;
+      updateButtons();
+    }
+  }
+
+  async function waitForResult(requestId) {
+    const deadline = performance.now() + 5000;
+    while (performance.now() < deadline) {
+      const result = await api('/requests/' + requestId, {});
+      if (result.result !== 'pending') return result.result;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    throw new Error('Result unavailable. Check the blind before retrying.');
+  }
+
+  byId('join').addEventListener('submit', event => {
+    event.preventDefault();
+    run(async () => {
+      await api('/network/join', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssid: byId('ssid').value, password: byId('password').value })
+      });
+      byId('password').value = '';
+      byId('setup').hidden = true;
+      byId('network').textContent = 'Joining Wi-Fi…';
+    });
+  });
+
+  byId('reopen').addEventListener('click', () => run(async () => {
+    await api('/network/setup', { method: 'POST' });
+    reopening = true;
+    byId('online').hidden = true;
+    byId('network').textContent = 'Join the open ' + setupSsid + ' network and visit http://192.168.4.1/.';
+  }));
+
+  byId('scan').addEventListener('click', () => run(async () => {
+    const { requestId } = await api('/discovery', { method: 'POST' });
+    const result = await waitForResult(requestId);
+    if (result !== 'discovery_started') throw new Error('The scan did not start.');
+    await readControls();
+  }));
+
+  commands.forEach(button => button.addEventListener('click', () => run(async () => {
+    const { requestId } = await api('/blinds/1/commands', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: button.dataset.command })
+    });
+    const result = await waitForResult(requestId);
+    const messages = {
+      transmitted: 'Radio transmission completed.',
+      not_sent: 'Command was not transmitted.',
+      transmission_uncertain: 'Transmission incomplete. Check the blind before retrying.',
+      transmitted_with_cleanup_error: 'Transmission completed, but radio cleanup failed.'
+    };
+    byId('result').textContent = messages[result] || result;
+  })));
+
+  poll();
+  setInterval(poll, 1000);
+</script>
+</html>

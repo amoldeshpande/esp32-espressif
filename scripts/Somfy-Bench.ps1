@@ -3,7 +3,6 @@ param(
     [string]$Action = 'Build',
     [ValidatePattern('^COM[0-9]+$')]
     [string]$Port = 'COM4',
-    [switch]$LegacyRf,
     [switch]$Clang,
     [string]$OutputRoot
 )
@@ -66,14 +65,7 @@ if ($Action -eq 'Probe' -or $Action -eq 'Backup') {
     return
 }
 
-$profile = if ($Clang) {
-    if ($LegacyRf) { 'clang-legacy' } else { 'clang' }
-} elseif ($LegacyRf) {
-    'legacy'
-} else {
-    'tuned'
-}
-$legacy = if ($LegacyRf) { 'ON' } else { 'OFF' }
+$profile = if ($Clang) { 'clang' } else { 'tuned' }
 $buildDir = Join-Path $OutputRoot "build-$profile"
 $sdkConfig = (Join-Path $buildDir 'sdkconfig').Replace('\', '/')
 
@@ -82,7 +74,7 @@ if ($Action -eq 'Build') {
     $configure = @(
         '-G', 'Ninja', '-S', $project, '-B', $buildDir, '-DESP_PLATFORM=1',
         "-DPYTHON=$python", '-DPYTHON_DEPS_CHECKED=1', '-DCCACHE_ENABLE=0',
-        "-DSDKCONFIG=$sdkConfig", "-DSOMFY_LEGACY_RF=$legacy"
+        "-DSDKCONFIG=$sdkConfig"
     )
     & $cmakeExe @configure
     if ($LASTEXITCODE -ne 0) { throw "ESP-IDF configure failed (exit $LASTEXITCODE)." }
@@ -94,7 +86,7 @@ if ($Action -eq 'Build') {
 
 $arguments = @(
     $idf, '-C', $project, '-B', $buildDir,
-    '-D', "SDKCONFIG=$sdkConfig", '-D', "SOMFY_LEGACY_RF=$legacy"
+    '-D', "SDKCONFIG=$sdkConfig"
 )
 
 switch ($Action) {
