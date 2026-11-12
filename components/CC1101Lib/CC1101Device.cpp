@@ -34,42 +34,6 @@ namespace TI_CC1101
     static constexpr byte     kDataRateExponentMask   = (1U << kBandwidthMantissaShift) - 1;
     static constexpr unsigned kHertzPerKHz            = 1'000;
 
-    struct RxModemPreset
-    {
-        byte rateExponent;
-        byte rateMantissa;
-        byte bitSync;
-        byte gainControl2;
-        byte gainControl1;
-        byte gainControl0;
-        byte test2;
-        byte test1;
-    };
-
-    // The original asynchronous modem settings from SmartRF Studio.
-    static constexpr RxModemPreset kSmartRfRxModem = {
-        .rateExponent = 5,
-        .rateMantissa = 0x83, // About 1.2 kBaud at 26 MHz.
-        .bitSync      = 0x6C, // Clock recovery starts at 2KI and 3KP, with data rate offset compensation disabled.
-        .gainControl2 = 0x03, // 33 dB target, with all analog and digital gain settings available.
-        .gainControl1 = 0x40, // Reduce LNA gain first. Carrier sense is at the gain target, with no relative threshold.
-        .gainControl0 = 0x91, // Medium hysteresis, 16 samples after a gain change, 8 dB OOK threshold, no gain freeze.
-        .test2        = 0x88, // Original CC1101 analog settings for the wide filter.
-        .test1        = 0x31,
-    };
-
-    // SmartRC v2.5.7 asynchronous modem settings used by ESPSomfy-RTS.
-    static constexpr RxModemPreset kSomfyRxModem = {
-        .rateExponent = 7,
-        .rateMantissa = 0x93, // About 5 kBaud at 26 MHz.
-        .bitSync      = 0x1C, // Clock recovery starts at KI and 2KP, with data rate offset compensation disabled.
-        .gainControl2 = 0xC7, // 42 dB target, all LNA settings, three highest digital gain settings disabled.
-        .gainControl1 = 0x00, // Reduce LNA2 gain first. Carrier sense is at the gain target, with no relative threshold.
-        .gainControl0 = 0xB2, // Medium hysteresis, 32 samples after a gain change, 12 dB OOK threshold, no gain freeze.
-        .test2        = 0x81, // CC1101 analog settings for a receive bandwidth below 325 kHz.
-        .test1        = 0x35,
-    };
-
     static constexpr byte     kMarcStateMask       = 0x1F; // MARCSTATE[4:0] is the radio state.
     static constexpr byte     kMarcStateIdle       = 0x01;
     static constexpr byte     kMarcStateRx         = 0x0D;
@@ -1136,7 +1100,7 @@ namespace TI_CC1101
 
     void CC1101Device::configure()
     {
-        const RxModemPreset &preset     = m_deviceConfig.UseSomfyRtsRxProfile ? kSomfyRxModem : kSmartRfRxModem;
+        const RxModemSettings &settings = m_deviceConfig.ReceiveModem;
         byte statusCode = 0;
         byte pktctrlVal = (byte)(((int)m_deviceConfig.PacketFmt << 4 | (int)m_deviceConfig.PacketLengthCfg));
 
@@ -1167,7 +1131,7 @@ namespace TI_CC1101
                     statusCode = writeRegister(CC1101_CONFIG::PKTCTRL0, pktctrlVal);
                     handleCommonStatusCodes(statusCode, false);
 
-                    SetDataRate(preset.rateExponent, preset.rateMantissa);
+                    SetDataRate(settings.rateExponent, settings.rateMantissa);
                 }
                 break;
             default:
@@ -1198,9 +1162,7 @@ namespace TI_CC1101
     void CC1101Device::regConfig()
     {
         byte returnValue = 0;
-        const bool somfyRts    = m_deviceConfig.UseSomfyRtsRxProfile &&
-                              m_deviceConfig.PacketFmt == PacketFormat::AsyncSerialMode;
-        const RxModemPreset &preset = somfyRts ? kSomfyRxModem : kSmartRfRxModem;
+        const RxModemSettings &settings = m_deviceConfig.ReceiveModem;
 
         returnValue = writeRegister(CC1101_CONFIG::FSCTRL1, 0x06);
         handleCommonStatusCodes(returnValue, false);
@@ -1222,13 +1184,13 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::WORCTRL, 0xFB);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::BSCFG, preset.bitSync);
+        returnValue = writeRegister(CC1101_CONFIG::BSCFG, settings.bitSync);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL2, preset.gainControl2);
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL2, settings.gainControl2);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL1, preset.gainControl1);
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL1, settings.gainControl1);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL0, preset.gainControl0);
+        returnValue = writeRegister(CC1101_CONFIG::AGCCTRL0, settings.gainControl0);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FSCAL3, 0xE9);
         handleCommonStatusCodes(returnValue, false);
@@ -1240,9 +1202,9 @@ namespace TI_CC1101
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FSTEST, 0x59);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::TEST2, preset.test2);
+        returnValue = writeRegister(CC1101_CONFIG::TEST2, settings.test2);
         handleCommonStatusCodes(returnValue, false);
-        returnValue = writeRegister(CC1101_CONFIG::TEST1, preset.test1);
+        returnValue = writeRegister(CC1101_CONFIG::TEST1, settings.test1);
         handleCommonStatusCodes(returnValue, false);
         returnValue = writeRegister(CC1101_CONFIG::FIFOTHR, 0x07);
         handleCommonStatusCodes(returnValue, false);

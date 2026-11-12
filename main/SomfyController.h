@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include "SomfyReceiver.h"
 #include "SomfyTransmitter.h"
 
 // Owns command execution for the paired bench blind. Call on the radio task,
@@ -47,6 +48,8 @@ class SomfyController final
     bool      RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps, bool transmitProfile);
     Result    Send(Command command);
     Status    GetStatus() const;
+    SomfyReceiver::Result OnEdge(uint32_t timestamp, SomfyReceiver::Frame &frame);
+    SomfyReceiver::Diagnostics TakeDiagnostics();
     void      StartDiscovery(uint64_t nowMs);
     bool      ObserveRemote(const Remote &remote, uint64_t nowMs);
     Discovery GetDiscovery(uint64_t nowMs) const;
@@ -54,6 +57,7 @@ class SomfyController final
   private:
     TI_CC1101::CC1101Device &m_radio;
     SomfyTransmitter         m_transmitter;
+    SomfyReceiver            m_receiver;
     bool                     m_transmitProfile = true;
     Discovery                m_discovery;
     uint64_t                 m_discoveryStartMs = 0;

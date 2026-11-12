@@ -25,6 +25,7 @@ bool SomfyController::RetuneReceive(float frequencyMHz, float bandwidthKHz, int8
 {
     bool bRet         = true;
 
+    m_receiver = {};
     m_transmitProfile = false;
     CBR(m_radio.RetuneReceive(frequencyMHz, bandwidthKHz, offsetSteps));
     m_transmitProfile = transmitProfile;
@@ -40,6 +41,7 @@ SomfyController::Result SomfyController::Send(Command command)
     if (m_transmitProfile)
     {
         result = m_transmitter.Send(m_radio, command);
+        m_receiver = {};
     }
     return result;
 }
@@ -106,4 +108,15 @@ SomfyController::Discovery SomfyController::GetDiscovery(uint64_t nowMs) const
 
     discovery.active    = discoveryActive(nowMs);
     return discovery;
+}
+
+
+SomfyReceiver::Result SomfyController::OnEdge(uint32_t timestamp, SomfyReceiver::Frame &frame)
+{
+    return m_receiver.OnEdge(timestamp, frame);
+}
+
+SomfyReceiver::Diagnostics SomfyController::TakeDiagnostics()
+{
+    return m_receiver.TakeDiagnostics();
 }

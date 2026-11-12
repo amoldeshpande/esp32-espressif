@@ -69,9 +69,9 @@ SomfyReceiver::Diagnostics SomfyReceiver::TakeDiagnostics()
     return sample;
 }
 
-bool SomfyReceiver::OnEdge(uint32_t timestamp, Frame &frame)
+SomfyReceiver::Result SomfyReceiver::OnEdge(uint32_t timestamp, Frame &frame)
 {
-    bool           bRet     = false;
+    Result result = Result::Incomplete;
 
     // Unsigned subtraction also handles wraparound of the microsecond timestamp.
     const uint32_t duration = timestamp - m_lastEdge;
@@ -87,12 +87,17 @@ bool SomfyReceiver::OnEdge(uint32_t timestamp, Frame &frame)
         {
             processSyncPulse(duration);
         }
-        else
+        else if (processDataPulse(duration))
         {
-            bRet = processDataPulse(duration, frame);
+            result = Result::BadChecksum;
+            if (decodeBase(m_buffer))
+            {
+                frame = m_buffer;
+                result = Result::Decoded;
+            }
         }
     }
-    return bRet;
+    return result;
 }
 
 void SomfyReceiver::processSyncPulse(uint32_t duration)
@@ -123,7 +128,7 @@ void SomfyReceiver::processSyncPulse(uint32_t duration)
     }
 }
 
-bool SomfyReceiver::processDataPulse(uint32_t duration, Frame &frame)
+bool SomfyReceiver::processDataPulse(uint32_t duration)
 {
     bool     bRet    = false;
     bool     haveBit = false;
@@ -157,7 +162,6 @@ bool SomfyReceiver::processDataPulse(uint32_t duration, Frame &frame)
         }
         if (m_buffer.bitCount == m_expectedBits)
         {
-            frame          = m_buffer;
             m_expectedBits = 0;
             m_syncEdges    = 0;
             bRet           = true;
@@ -166,7 +170,7 @@ bool SomfyReceiver::processDataPulse(uint32_t duration, Frame &frame)
     return bRet;
 }
 
-bool SomfyReceiver::DecodeBase(Frame &frame)
+bool SomfyReceiver::decodeBase(Frame &frame)
 {
     constexpr std::size_t kBaseFrameBytes = kStandardFrameBits / CHAR_BIT;
     bool                  bRet            = false;

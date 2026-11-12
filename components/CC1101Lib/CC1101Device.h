@@ -25,6 +25,19 @@ namespace TI_CC1101
 {
     class SpiMaster;
 
+    // The original asynchronous modem settings from SmartRF Studio.
+    struct RxModemSettings
+    {
+        byte rateExponent{5};
+        byte rateMantissa{0x83}; // About 1.2 kBaud at 26 MHz.
+        byte bitSync{0x6C}; // Clock recovery starts at 2KI and 3KP, with data rate offset compensation disabled.
+        byte gainControl2{0x03}; // 33 dB target, with all analog and digital gain settings available.
+        byte gainControl1{0x40}; // Reduce LNA gain first. Carrier sense is at the gain target, with no relative threshold.
+        byte gainControl0{0x91}; // Medium hysteresis, 16 samples after a gain change, 8 dB OOK threshold, no gain freeze.
+        byte test2{0x88}; // Original CC1101 analog settings for the wide filter.
+        byte test1{0x31};
+    };
+
     struct CC110DeviceConfig
     {
         gpio_num_t                TxPin;
@@ -45,7 +58,7 @@ namespace TI_CC1101
         SyncWordQualifierMode     SyncMode{SyncWordQualifierMode::NoPreambleOrSync_CarrierSenseAboveThreshold};
         AddressCheckConfiguration AddressCheck{AddressCheckConfiguration::None};
         bool                      EnableAppendStatusBytes{false};
-        bool                      UseSomfyRtsRxProfile{false};
+        RxModemSettings            ReceiveModem{};
 
         QueueHandle_t InterruptQueue;
 

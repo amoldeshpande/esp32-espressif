@@ -43,13 +43,21 @@ class SomfyReceiver final
     };
 
     Diagnostics TakeDiagnostics();
-    bool        OnEdge(uint32_t timestamp, Frame &frame);
-    static bool DecodeBase(Frame &frame);
+    enum class Result
+    {
+        Incomplete,
+        BadChecksum,
+        Decoded
+    };
+
+    // Writes frame only when decoding succeeds.
+    Result OnEdge(uint32_t timestamp, Frame &frame);
 
   private:
     static bool withinTolerance(uint32_t duration, uint32_t nominal);
     void        processSyncPulse(uint32_t duration);
-    bool        processDataPulse(uint32_t duration, Frame &frame);
+    bool        processDataPulse(uint32_t duration);
+    static bool decodeBase(Frame &frame);
 
     Frame       m_buffer{};
     Diagnostics m_diagnostics{};

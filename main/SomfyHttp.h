@@ -23,9 +23,10 @@
 class SomfyHttp final
 {
   public:
-    bool Start(SomfyController &controller, uint64_t nowMs);
-    bool ProcessRequest(SomfyController &controller, uint64_t nowMs);
-    void Publish(SomfyController &controller, uint64_t nowMs);
+    explicit SomfyHttp(SomfyController &controller) : m_controller(controller) {}
+    bool Start(uint64_t nowMs);
+    // Called by the radio task to service queued work and refresh HTTP snapshots.
+    void Poll(uint64_t nowMs);
 
   private:
     enum class Operation : uint8_t
@@ -61,6 +62,9 @@ class SomfyHttp final
     esp_err_t        post(httpd_req_t *request);
     esp_err_t        networkRequest(httpd_req_t *request);
 
+    void publish(uint64_t nowMs);
+
+    SomfyController &m_controller;
     QueueHandle_t    m_requests  = nullptr;
     QueueHandle_t    m_snapshots = nullptr;
     httpd_handle_t   m_server    = nullptr;

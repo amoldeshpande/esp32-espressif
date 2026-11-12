@@ -40,7 +40,7 @@ static esp_err_t  servePage(httpd_req_t *request)
     return httpd_resp_sendstr(request, somfyPage);
 }
 
-bool SomfyHttp::Start(SomfyController &controller, uint64_t nowMs)
+bool SomfyHttp::Start(uint64_t nowMs)
 {
     bool           bRet   = true;
     httpd_config_t server = HTTPD_DEFAULT_CONFIG();
@@ -52,8 +52,8 @@ bool SomfyHttp::Start(SomfyController &controller, uint64_t nowMs)
     CBR(m_requests != nullptr);
     CBR(m_snapshots != nullptr);
 
-    CBR(m_network.Start(controller.GetStatus().address, nowMs));
-    Publish(controller, nowMs);
+    CBR(m_network.Start(m_controller.GetStatus().address, nowMs));
+    publish(nowMs);
     server.uri_match_fn      = httpd_uri_match_wildcard;
     // Bound how long an idle client can hold the single HTTP task.
     server.recv_wait_timeout = 2;
@@ -97,19 +97,18 @@ Error:
     return bRet;
 }
 
-void SomfyHttp::Publish(SomfyController &controller, uint64_t nowMs)
+void SomfyHttp::publish(uint64_t nowMs)
 {
     if (m_snapshots)
     {
-        m_snapshot.blind     = controller.GetStatus();
-        m_snapshot.discovery = controller.GetDiscovery(nowMs);
+        m_snapshot.blind     = m_controller.GetStatus();
+        m_snapshot.discovery = m_controller.GetDiscovery(nowMs);
         xQueueOverwrite(m_snapshots, &m_snapshot);
     }
 }
 
-bool SomfyHttp::ProcessRequest(SomfyController &controller, uint64_t nowMs)
+void SomfyHttp::Poll(uint64_t nowMs)
 {
-    bool       bRet = false;
     Request    request;
     Completion completion{SomfyController::Result::NotSent, false};
 
@@ -123,20 +122,18 @@ bool SomfyHttp::ProcessRequest(SomfyController &controller, uint64_t nowMs)
         {
             if (request.operation == Operation::Discovery)
             {
-                controller.StartDiscovery(nowMs);
+                m_controller.StartDiscovery(nowMs);
                 completion.discoveryStarted = true;
             }
             else
             {
-                completion.result = controller.Send(request.command);
-                bRet              = true; // Reset the pulse decoder after a possible TX pause.
+                completion.result = m_controller.Send(request.command);
             }
         }
         m_snapshot.completions[request.id % m_snapshot.completions.size()] = completion;
         m_snapshot.lastCompletedId                                         = request.id;
-        Publish(controller, nowMs);
     }
-    return bRet;
+    publish(nowMs);
 }
 
 static bool sameOrigin(httpd_req_t *request)

@@ -84,7 +84,17 @@ extern "C" void app_main(void)
         .ReceiveFilterBandwidthKHz = defaultProfile.bandwidthKHz,
         .FrequencyOffsetSteps      = defaultProfile.offsetSteps,
         .DisableDCFilter           = false,
-        .UseSomfyRtsRxProfile      = true,
+        // SmartRC v2.5.7 asynchronous modem settings used by ESPSomfy-RTS.
+        .ReceiveModem              = {
+            .rateExponent = 7,
+            .rateMantissa = 0x93, // About 5 kBaud at 26 MHz.
+            .bitSync      = 0x1C, // Clock recovery starts at KI and 2KP, with data rate offset compensation disabled.
+            .gainControl2 = 0xC7, // 42 dB target, all LNA settings, three highest digital gain settings disabled.
+            .gainControl1 = 0x00, // Reduce LNA2 gain first. Carrier sense is at the gain target, with no relative threshold.
+            .gainControl0 = 0xB2, // Medium hysteresis, 32 samples after a gain change, 12 dB OOK threshold, no gain freeze.
+            .test2        = 0x81, // CC1101 analog settings for a receive bandwidth below 325 kHz.
+            .test1        = 0x35,
+        },
         .InterruptQueue = edgeQueue};
 
     if (!edgeQueue)
@@ -111,10 +121,10 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
 {
     bool consoleReady;
     char activeProfile = kDefaultProfileKey;
-    SomfyReceiver              receiver;
     SomfyController            controller(cc1101Device);
-    static SomfyHttp           http;
+    static SomfyHttp           http(controller);
     SomfyReceiver::Frame       frame;
+    SomfyReceiver::Result      decodeResult;
     SomfyReceiver::Diagnostics sample;
     ReceiveProfile             profile;
     uint32_t                   timestamp;
@@ -132,7 +142,7 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
         ESP_LOGE(TAG, "Transmit setup failed; continuing with reception only");
     }
     logTransmitStatus(controller);
-    if (!http.Start(controller, monotonicMs()))
+    if (!http.Start(monotonicMs()))
     {
         ESP_LOGE(TAG, "Continuing with serial control");
     }
@@ -154,23 +164,18 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
         if (xQueueReceive(edgeQueue, &timestamp, pdMS_TO_TICKS(kRssiSampleIntervalMs)) == pdTRUE)
         {
             ++edgeCount;
-            if (receiver.OnEdge(timestamp, frame))
+            decodeResult = controller.OnEdge(timestamp, frame);
+            if (decodeResult == SomfyReceiver::Result::Decoded)
             {
-                if (SomfyReceiver::DecodeBase(frame))
-                {
-                    ++frameCount;
-                    if (controller.ObserveRemote({frame.RemoteAddress(), frame.Command(), frame.RollingCode(), frame.bitCount},
-                                                 monotonicMs()))
-                    {
-                        http.Publish(controller, monotonicMs());
-                    }
-                    ESP_LOGI(TAG, "RTS %u-bit frame, base checksum OK, remote=%06" PRIX32 " command=%u rolling=%u",
-                             frame.bitCount, frame.RemoteAddress(), frame.Command(), frame.RollingCode());
-                }
-                else
-                {
-                    ++badChecksumCount;
-                }
+                ++frameCount;
+                controller.ObserveRemote({frame.RemoteAddress(), frame.Command(), frame.RollingCode(), frame.bitCount},
+                                         monotonicMs());
+                ESP_LOGI(TAG, "RTS %u-bit frame, base checksum OK, remote=%06" PRIX32 " command=%u rolling=%u",
+                         frame.bitCount, frame.RemoteAddress(), frame.Command(), frame.RollingCode());
+            }
+            else if (decodeResult == SomfyReceiver::Result::BadChecksum)
+            {
+                ++badChecksumCount;
             }
         }
 
@@ -199,29 +204,22 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
                 {
                     processTransmitKey(controller, key);
                 }
-                // The decoder must not interpret a retune or TX pause as an incoming pulse.
-                receiver         = {};
                 edgeCount        = 0;
                 frameCount       = 0;
                 badChecksumCount = 0;
                 peakRssi         = kMinRssiDbm;
                 now              = xTaskGetTickCount();
                 lastReport       = now;
-                http.Publish(controller, monotonicMs());
             }
-            if (http.ProcessRequest(controller, monotonicMs()))
-            {
-                receiver = {};
-                now = xTaskGetTickCount();
-            }
+            http.Poll(monotonicMs());
+            now = xTaskGetTickCount();
             peakRssi       = std::max(peakRssi, cc1101Device.ReadRssiDbm());
             lastRssiSample = now;
         }
         // Report the receiver statistics in two-second windows.
         if (now - lastReport >= pdMS_TO_TICKS(2'000))
         {
-            http.Publish(controller, monotonicMs());
-            sample = receiver.TakeDiagnostics();
+            sample = controller.TakeDiagnostics();
             ESP_LOGI(TAG, "RX 2s: profile=%c, edges=%" PRIu32 ", peak RSSI=%d dBm, syncs=%u, timing aborts=%u, max bits=%u,"
                           " checksum OK=%" PRIu32 ", checksum failed=%" PRIu32,
                      activeProfile, edgeCount, peakRssi, sample.syncs, sample.timingAborts, sample.mostBits,
