@@ -41,5 +41,3 @@ not sure how to use openocd with ESP32-WROOM yet.
 Some ESP32 chips have built-in JTAG, but HiLetGo's WROOM-32S doesn't seem to have it. So you need ESP-PROG for it. 
 https://github.com/PBearson/ESP32-With-ESP-PROG-Demo
 
-
-For Arduino, copy the files under components into a subdirectory called "src" under esp32-main
