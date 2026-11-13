@@ -15,6 +15,8 @@
 
 #include <CC1101Lib/CC1101Device.h>
 #include <CC1101Lib/LocalTypes.h>
+#include <algorithm>
+#include <esp_timer.h>
 
 bool SomfyController::Init(gpio_num_t txPin)
 {
@@ -39,6 +41,150 @@ uint32_t SomfyController::AddBlind(const char *name)
     return m_transmitter.AddBlind(name);
 }
 
+bool SomfyController::RenameBlind(uint32_t id, const char *name)
+{
+    return m_transmitter.RenameBlind(id, name);
+}
+
+bool SomfyController::RemoveBlind(uint32_t id)
+{
+    bool bRet = true;
+
+    CBR(m_transmitter.RemoveBlind(id));
+    m_motion[id - 1] = {};
+
+Error:
+    return bRet;
+}
+
+bool SomfyController::RenameGroup(uint32_t address, const char *name)
+{
+    return m_transmitter.RenameGroup(address, name);
+}
+
+bool SomfyController::DeleteGroup(uint32_t address)
+{
+    const Blinds blinds = m_transmitter.GetBlinds();
+    const bool   bRet   = m_transmitter.DeleteGroup(address);
+
+    for (uint32_t id = 1; id <= blinds.size(); ++id)
+    {
+        if (blinds[id - 1].remoteAddress == address)
+        {
+            m_motion[id - 1] = {};
+        }
+    }
+    return bRet;
+}
+
+bool SomfyController::SetRemote(uint32_t id, uint32_t address)
+{
+    bool bRet = true;
+
+    CBR(m_transmitter.SetRemote(id, address));
+    m_motion[id - 1] = {};
+
+Error:
+    return bRet;
+}
+
+bool SomfyController::SetTravelTimes(uint32_t id, uint32_t openMs, uint32_t closeMs)
+{
+    bool bRet = true;
+
+    CBR(m_transmitter.SetTravelTimes(id, openMs, closeMs));
+    m_motion[id - 1] = {};
+
+Error:
+    return bRet;
+}
+
+int SomfyController::Position(uint32_t id) const
+{
+    return position(id, esp_timer_get_time() / 1000); // Convert microseconds to milliseconds.
+}
+
+int SomfyController::position(uint32_t id, uint64_t nowMs) const
+{
+    int           estimate = -1;
+    const Status  blind    = m_transmitter.GetStatus(id);
+    const Motion *motion;
+    uint32_t      duration;
+    uint64_t      elapsed;
+    int           travel;
+
+    if (blind.address && blind.openMs && blind.closeMs)
+    {
+        motion   = &m_motion[id - 1];
+        estimate = motion->start;
+        if (motion->direction != Command::My)
+        {
+            duration = motion->direction == Command::Open ? blind.openMs : blind.closeMs;
+            elapsed  = nowMs - motion->since;
+            if (elapsed >= duration)
+            {
+                estimate = motion->direction == Command::Open ? 100 : 0; // Fully open or closed.
+            }
+            else if (estimate >= 0)
+            {
+                travel   = static_cast<int>(elapsed * 100 / duration); // Percent of full travel.
+                estimate = motion->direction == Command::Open ? std::min(100, estimate + travel)
+                                                              : std::max(0, estimate - travel);
+            }
+        }
+    }
+    return estimate;
+}
+
+void SomfyController::trackCommand(uint32_t id, Command command, Result result, uint64_t nowMs)
+{
+    const int estimate = position(id, nowMs);
+    Motion   *motion;
+
+    if (id && id <= m_motion.size() && result != Result::NotSent && command != Command::Program)
+    {
+        motion = &m_motion[id - 1];
+        if (result == Result::TransmissionUncertain)
+        {
+            *motion = {};
+        }
+        else if (command == Command::My)
+        {
+            // My while stopped can move the blind to an unknown favorite position.
+            motion->start     = motion->direction != Command::My && estimate > 0 && estimate < 100 ? estimate : -1;
+            motion->direction = Command::My;
+        }
+        else
+        {
+            *motion = {estimate, nowMs, command};
+        }
+    }
+}
+
+SomfyController::GroupResult SomfyController::SendGroup(uint32_t address, Command command)
+{
+    GroupResult  result{};
+    const Blinds blinds = GetBlinds();
+    Result       outcome;
+
+    if (address && command != Command::Program)
+    {
+        for (uint32_t id = 1; id <= blinds.size(); ++id)
+        {
+            if (blinds[id - 1].address && blinds[id - 1].remoteAddress == address)
+            {
+                ++result.members;
+                outcome = Send(id, command);
+                if (outcome == Result::Transmitted || outcome == Result::TransmittedWithCleanupError)
+                {
+                    ++result.transmitted;
+                }
+            }
+        }
+    }
+    return result;
+}
+
 bool SomfyController::ConfirmPairing(uint32_t id)
 {
     return m_transmitter.ConfirmPairing(id);
@@ -52,6 +198,7 @@ SomfyController::Result SomfyController::Send(uint32_t id, Command command)
     {
         result     = m_transmitter.Send(m_radio, id, command);
         m_receiver = {};
+        trackCommand(id, command, result, esp_timer_get_time() / 1000);
     }
     return result;
 }
@@ -93,6 +240,15 @@ bool SomfyController::discoveryActive(uint64_t nowMs) const
 bool SomfyController::ObserveRemote(const Remote &remote, uint64_t nowMs)
 {
     bool bRet = false;
+
+    // Physical remote presses can change position outside bridge control.
+    for (uint32_t id = 1; id <= m_motion.size(); ++id)
+    {
+        if (remote.address && m_transmitter.GetStatus(id).remoteAddress == remote.address)
+        {
+            m_motion[id - 1] = {};
+        }
+    }
 
     if (discoveryActive(nowMs))
     {

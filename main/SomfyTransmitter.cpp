@@ -17,6 +17,7 @@
 #include <CC1101Lib/LocalTypes.h>
 #include <cinttypes>
 #include <climits>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <esp_log.h>
@@ -40,6 +41,7 @@ bool SomfyTransmitter::saveBlind(uint32_t id, const Record &record)
     bool bRet = true;
     char key[sizeof("blind_v1_8")]; // One versioned NVS record per blind.
 
+    CBR(!m_storageFailed);
     snprintf(key, sizeof(key), "blind_v1_%" PRIu32, id);
     CER(nvs_set_blob(m_storage, key, &record, sizeof(record)));
     CER(nvs_commit(m_storage));
@@ -49,7 +51,8 @@ Error:
     if (!bRet)
     {
         // A write may have reached flash. Reload the records before using TX again.
-        m_ready = false;
+        m_ready         = false;
+        m_storageFailed = true;
         ESP_LOGE(TAG, "Could not save blind %" PRIu32, id);
     }
     return bRet;
@@ -102,8 +105,8 @@ Error:
 
 bool SomfyTransmitter::loadBlinds()
 {
-    bool      bRet    = true;
-    bool      missing = false;
+    bool      bRet = true;
+
     Record    record;
     char      key[sizeof("blind_v1_8")];
     size_t    size;
@@ -114,21 +117,31 @@ bool SomfyTransmitter::loadBlinds()
     for (uint32_t id = 1; id <= m_blinds.size(); ++id)
     {
         snprintf(key, sizeof(key), "blind_v1_%" PRIu32, id);
+        record = {};
         size   = sizeof(record);
         result = nvs_get_blob(m_storage, key, &record, &size);
-        if (result == ESP_ERR_NVS_NOT_FOUND)
-        {
-            missing = true;
-        }
-        else
+        if (result != ESP_ERR_NVS_NOT_FOUND)
         {
             CER(result);
-            CBR(!missing && size == sizeof(record));
+            // Old records end just before the new remote and travel-time fields.
+            CBR(size == sizeof(record) || size == offsetof(Record, remoteAddress));
             CBR(record.address != 0 && record.address < kAddressMask && !hasAddress(record.address));
             CBR(record.nextCode != 0 && record.nextCode <= kLastRollingCode + 1);
-            CBR(record.pairing <= Pairing::Paired);
+            CBR(record.pairing <= Pairing::Removed);
+            CBR(record.remoteAddress < kAddressMask);
             CBR(record.name[0] && record.name[sizeof(record.name) - 1] == '\0');
             m_blinds[id - 1] = record;
+        }
+    }
+    size   = sizeof(m_groupNames);
+    result = nvs_get_blob(m_storage, "group_names_v1", &m_groupNames, &size);
+    if (result != ESP_ERR_NVS_NOT_FOUND)
+    {
+        CER(result);
+        CBR(size == sizeof(m_groupNames));
+        for (const GroupName &group : m_groupNames)
+        {
+            CBR(group.address < kAddressMask && group.name[sizeof(group.name) - 1] == '\0');
         }
     }
     if (m_blinds.front().address == 0)
@@ -155,7 +168,7 @@ uint32_t SomfyTransmitter::createBlind(const char *name)
     CBR(m_storage != 0 && length > 0 && length < sizeof(record.name));
     for (uint32_t candidate = 1; candidate <= m_blinds.size(); ++candidate)
     {
-        if (m_blinds[candidate - 1].address == 0)
+        if (!exists(candidate))
         {
             id = candidate;
             break;
@@ -174,6 +187,154 @@ uint32_t SomfyTransmitter::createBlind(const char *name)
 
 Error:
     return bRet ? id : 0;
+}
+
+bool SomfyTransmitter::exists(uint32_t id) const
+{
+    return id != 0 && id <= m_blinds.size() && m_blinds[id - 1].address != 0 &&
+           m_blinds[id - 1].pairing != Pairing::Removed;
+}
+
+bool SomfyTransmitter::RenameBlind(uint32_t id, const char *name)
+{
+    bool         bRet   = true;
+    const size_t length = strlen(name);
+    Record       record;
+
+    CBR(exists(id));
+    record = m_blinds[id - 1];
+    CBR(length > 0 && length < sizeof(record.name));
+    memset(record.name, 0, sizeof(record.name));
+    memcpy(record.name, name, length);
+    CBR(saveBlind(id, record));
+
+Error:
+    return bRet;
+}
+
+bool SomfyTransmitter::RemoveBlind(uint32_t id)
+{
+    bool   bRet = true;
+    Record record;
+
+    CBR(exists(id));
+    record               = m_blinds[id - 1];
+    // Retain the tombstone so reboot cannot import the old bench pairing again.
+    record.pairing       = Pairing::Removed;
+    record.remoteAddress = 0;
+    CBR(saveBlind(id, record));
+
+Error:
+    return bRet;
+}
+
+bool SomfyTransmitter::hasGroup(uint32_t address) const
+{
+    bool found = false;
+
+    for (const Record &record : m_blinds)
+    {
+        if (address && record.pairing != Pairing::Removed && record.remoteAddress == address)
+        {
+            found = true;
+            break;
+        }
+    }
+    return found;
+}
+
+bool SomfyTransmitter::RenameGroup(uint32_t address, const char *name)
+{
+    bool         bRet   = true;
+    const size_t length = strlen(name);
+    GroupNames   names  = m_groupNames;
+    GroupName   *entry  = nullptr;
+
+    CBR(!m_storageFailed && hasGroup(address));
+    CBR(length > 0 && length < sizeof(GroupName::name));
+    for (GroupName &group : names)
+    {
+        if (group.address == address)
+        {
+            entry = &group;
+            break;
+        }
+        if (!entry && !hasGroup(group.address))
+        {
+            entry = &group;
+        }
+    }
+    CBR(entry != nullptr);
+    *entry         = {};
+    entry->address = address;
+    memcpy(entry->name, name, length);
+    CER(nvs_set_blob(m_storage, "group_names_v1", &names, sizeof(names)));
+    CER(nvs_commit(m_storage));
+    m_groupNames = names;
+
+Error:
+    return bRet;
+}
+
+bool SomfyTransmitter::DeleteGroup(uint32_t address)
+{
+    bool       bRet  = true;
+    GroupNames names = m_groupNames;
+
+    CBR(!m_storageFailed && address != 0 && address < kAddressMask);
+    // Clear the name before unlinking members so a future group starts unnamed.
+    for (GroupName &group : names)
+    {
+        if (group.address == address)
+        {
+            group = {};
+            CER(nvs_set_blob(m_storage, "group_names_v1", &names, sizeof(names)));
+            CER(nvs_commit(m_storage));
+            m_groupNames = names;
+            break;
+        }
+    }
+    for (uint32_t id = 1; id <= m_blinds.size(); ++id)
+    {
+        if (exists(id) && m_blinds[id - 1].remoteAddress == address)
+        {
+            CBR(SetRemote(id, 0));
+        }
+    }
+
+Error:
+    return bRet;
+}
+
+bool SomfyTransmitter::SetRemote(uint32_t id, uint32_t address)
+{
+    bool   bRet = true;
+    Record record;
+
+    CBR(exists(id));
+    CBR(address < kAddressMask);
+    record               = m_blinds[id - 1];
+    record.remoteAddress = address;
+    CBR(saveBlind(id, record));
+
+Error:
+    return bRet;
+}
+
+bool SomfyTransmitter::SetTravelTimes(uint32_t id, uint32_t openMs, uint32_t closeMs)
+{
+    bool   bRet = true;
+    Record record;
+
+    CBR(exists(id));
+    CBR(openMs > 0 && closeMs > 0);
+    record         = m_blinds[id - 1];
+    record.openMs  = openMs;
+    record.closeMs = closeMs;
+    CBR(saveBlind(id, record));
+
+Error:
+    return bRet;
 }
 
 bool SomfyTransmitter::ConfirmPairing(uint32_t id)
@@ -325,7 +486,7 @@ SomfyTransmitter::Result SomfyTransmitter::Send(TI_CC1101::CC1101Device &radio, 
         command == Command::Close || command == Command::Program);
     CBR(id != 0 && id <= m_blinds.size());
     record = m_blinds[id - 1];
-    CBR(record.address != 0);
+    CBR(exists(id));
     if (command == Command::Program)
     {
         CBR(record.pairing != Pairing::Paired);
@@ -404,13 +565,24 @@ SomfyTransmitter::Status SomfyTransmitter::GetStatus(uint32_t id) const
     Status        status{};
     const Record *record;
 
-    if (id != 0 && id <= m_blinds.size())
+    if (exists(id))
     {
-        record          = &m_blinds[id - 1];
-        status.address  = record->address;
-        status.nextCode = record->nextCode;
-        status.pairing  = record->pairing;
-        status.ready    = m_ready && record->address != 0 && record->pairing == Pairing::Paired &&
+        record = &m_blinds[id - 1];
+        for (const GroupName &group : m_groupNames)
+        {
+            if (record->remoteAddress && group.address == record->remoteAddress)
+            {
+                memcpy(status.groupName, group.name, sizeof(status.groupName));
+                break;
+            }
+        }
+        status.remoteAddress = record->remoteAddress;
+        status.openMs        = record->openMs;
+        status.closeMs       = record->closeMs;
+        status.address       = record->address;
+        status.nextCode      = record->nextCode;
+        status.pairing       = record->pairing;
+        status.ready         = m_ready && record->address != 0 && record->pairing == Pairing::Paired &&
                        record->nextCode <= kLastRollingCode;
         memcpy(status.name, record->name, sizeof(status.name));
     }

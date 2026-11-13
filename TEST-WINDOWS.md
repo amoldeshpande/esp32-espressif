@@ -91,3 +91,12 @@ Each POST returns a request ID. Poll `GET /api/requests/{requestId}` for its res
 4. Send commands separately to IDs 1 and 2. Reboot the ESP32 and repeat the test to check that the identities, pairing states, and rolling codes persisted.
 
 The new registry takes over rolling-code storage after migration. Earlier firmware reads the old bench counter, which will be stale after commands from this build.
+
+## Create a group from remote discovery
+
+Start a scan or choose **Discover remote for this blind** on a saved blind.
+Press a movement button on the physical remote channel. The first detected
+remote opens the group editor. If several addresses appear, choose the one
+you want. Select the saved blinds you saw move and click **Save group**.
+Existing members and the blind that started the scan are preselected.
+Use **Edit members** to change the group later. Existing pairings are reused.

@@ -101,7 +101,11 @@ void SomfyHttp::publish(uint64_t nowMs)
 {
     if (m_snapshots)
     {
-        m_snapshot.blinds    = m_controller.GetBlinds();
+        m_snapshot.blinds = m_controller.GetBlinds();
+        for (uint32_t id = 1; id <= m_snapshot.blinds.size(); ++id)
+        {
+            m_snapshot.positions[id - 1] = m_controller.Position(id);
+        }
         m_snapshot.discovery = m_controller.GetDiscovery(nowMs);
         xQueueOverwrite(m_snapshots, &m_snapshot);
     }
@@ -134,6 +138,51 @@ void SomfyHttp::Poll(uint64_t nowMs)
                     completion.setupResult = m_controller.ConfirmPairing(request.blindId)
                                                  ? "pairing_confirmed"
                                                  : "confirmation_rejected";
+                    break;
+                case Operation::RenameBlind:
+                    completion.setupResult = m_controller.RenameBlind(request.blindId, request.name)
+                                                 ? "blind_renamed"
+                                                 : "rename_failed";
+                    break;
+                case Operation::RemoveBlind:
+                    completion.setupResult = m_controller.RemoveBlind(request.blindId)
+                                                 ? "blind_removed"
+                                                 : "remove_failed";
+                    break;
+                case Operation::SetRemote:
+                    completion.setupResult = m_controller.SetRemote(request.blindId, request.remoteAddress)
+                                                 ? "remote_saved"
+                                                 : "remote_save_failed";
+                    break;
+                case Operation::SetTravelTimes:
+                    completion.setupResult = m_controller.SetTravelTimes(request.blindId, request.openMs, request.closeMs)
+                                                 ? "travel_times_saved"
+                                                 : "travel_times_save_failed";
+                    break;
+                case Operation::RenameGroup:
+                    completion.setupResult = m_controller.RenameGroup(request.remoteAddress, request.name)
+                                                 ? "group_renamed"
+                                                 : "group_rename_failed";
+                    break;
+                case Operation::DeleteGroup:
+                    completion.setupResult = m_controller.DeleteGroup(request.remoteAddress)
+                                                 ? "group_deleted"
+                                                 : "group_delete_failed";
+                    break;
+                case Operation::GroupCommand:
+                    {
+                        const auto group = m_controller.SendGroup(request.remoteAddress, request.command);
+                        if (group.transmitted == 0)
+                        {
+                            completion.setupResult = "group_not_transmitted";
+                        }
+                        else
+                        {
+                            completion.setupResult = group.transmitted == group.members
+                                                         ? "group_transmitted"
+                                                         : "group_partially_transmitted";
+                        }
+                    }
                     break;
                 case Operation::Command:
                     completion.result = m_controller.Send(request.blindId, request.command);
@@ -401,7 +450,7 @@ esp_err_t SomfyHttp::getRequest(httpd_req_t *request, const char *suffix, const 
     return result;
 }
 
-static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds &blinds)
+static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds &blinds, const int *positions)
 {
     bool                           bRet = true;
     cJSON                         *list = cJSON_CreateArray();
@@ -441,6 +490,19 @@ static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds 
         CBR(cJSON_AddStringToObject(item, "name", blind->name));
         CBR(cJSON_AddStringToObject(item, "address", address));
         CBR(cJSON_AddStringToObject(item, "pairing", pairing));
+        snprintf(address, sizeof(address), "%06" PRIX32, blind->remoteAddress);
+        CBR(cJSON_AddStringToObject(item, "remoteAddress", blind->remoteAddress ? address : ""));
+        CBR(cJSON_AddStringToObject(item, "groupName", blind->groupName));
+        CBR(cJSON_AddNumberToObject(item, "openMs", blind->openMs));
+        CBR(cJSON_AddNumberToObject(item, "closeMs", blind->closeMs));
+        if (positions[id - 1] < 0)
+        {
+            CBR(cJSON_AddNullToObject(item, "position"));
+        }
+        else
+        {
+            CBR(cJSON_AddNumberToObject(item, "position", positions[id - 1]));
+        }
         CBR(cJSON_AddBoolToObject(item, "ready", blind->ready));
     }
     json = cJSON_PrintUnformatted(list);
@@ -471,7 +533,7 @@ esp_err_t SomfyHttp::get(httpd_req_t *request)
     xQueuePeek(m_snapshots, &snapshot, 0);
     if (strcmp(request->uri, "/api/blinds") == 0)
     {
-        result = sendBlinds(request, snapshot.blinds);
+        result = sendBlinds(request, snapshot.blinds, snapshot.positions.data());
     }
     else if (strncmp(request->uri, requestPrefix, sizeof(requestPrefix) - 1) == 0)
     {
@@ -507,19 +569,19 @@ esp_err_t SomfyHttp::get(httpd_req_t *request)
     return result;
 }
 
-static bool parseBlindPath(const char *path, uint32_t &id, const char *&action)
+static bool parseActionPath(const char *path, const char *prefix, int base, uint32_t &id, const char *&action)
 {
-    bool                   bRet     = true;
-    const char             prefix[] = "/api/blinds/";
+    bool                   bRet         = true;
+    const size_t           prefixLength = strlen(prefix);
     const char            *start;
     const char            *slash;
     std::from_chars_result parsed{};
 
-    CBR(strncmp(path, prefix, sizeof(prefix) - 1) == 0);
-    start = path + sizeof(prefix) - 1;
+    CBR(strncmp(path, prefix, prefixLength) == 0);
+    start = path + prefixLength;
     slash = strchr(start, '/');
     CBR(slash != nullptr);
-    parsed = std::from_chars(start, slash, id);
+    parsed = std::from_chars(start, slash, id, base);
     CBR(parsed.ec == std::errc{} && parsed.ptr == slash && id != 0);
     action = slash + 1;
 
@@ -527,17 +589,57 @@ Error:
     return bRet;
 }
 
+static bool readCommand(const cJSON *json, SomfyController::Command &command)
+{
+    bool         bRet  = true;
+    const cJSON *field = cJSON_GetObjectItemCaseSensitive(json, "command");
+
+    CBR(cJSON_IsString(field));
+    if (strcmp(field->valuestring, "open") == 0)
+    {
+        command = SomfyController::Command::Open;
+    }
+    else if (strcmp(field->valuestring, "close") == 0)
+    {
+        command = SomfyController::Command::Close;
+    }
+    else
+    {
+        CBR(strcmp(field->valuestring, "my") == 0 || strcmp(field->valuestring, "stop") == 0);
+        command = SomfyController::Command::My;
+    }
+
+Error:
+    return bRet;
+}
+
+static bool readTravelTime(const cJSON *field, uint32_t &ms)
+{
+    bool bRet = true;
+
+    CBR(cJSON_IsNumber(field));
+    // A full travel time must be an integer from one millisecond to ten minutes.
+    CBR(field->valuedouble >= 1 && field->valuedouble <= 600'000);
+    ms = static_cast<uint32_t>(field->valuedouble);
+    CBR(ms == field->valuedouble);
+
+Error:
+    return bRet;
+}
+
 esp_err_t SomfyHttp::post(httpd_req_t *request)
 {
-    bool         bRet = true;
-    Request      pending{};
-    const char  *status   = "400 Bad Request";
-    const char  *response = R"({"error":"invalid_command"})";
-    char         body[256]; // A 32-byte name can expand to six JSON characters per byte.
-    cJSON       *json = nullptr;
-    const cJSON *field;
-    const char  *action;
-    Snapshot     snapshot{};
+    bool                   bRet = true;
+    Request                pending{};
+    const char            *status   = "400 Bad Request";
+    const char            *response = R"({"error":"invalid_command"})";
+    char                   body[256]; // A 32-byte name can expand to six JSON characters per byte.
+    cJSON                 *json = nullptr;
+    const cJSON           *field;
+    const char            *action;
+    Snapshot               snapshot{};
+    const char            *end;
+    std::from_chars_result parsed{};
 
     if (strcmp(request->uri, "/api/discovery") == 0)
     {
@@ -554,11 +656,43 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
         CBR(field->valuestring[0] && strlen(field->valuestring) < sizeof(pending.name));
         memcpy(pending.name, field->valuestring, strlen(field->valuestring));
     }
+    else if (parseActionPath(request->uri, "/api/groups/", 16, pending.remoteAddress, action))
+    {
+        CBR(pending.remoteAddress < 0xFFFFFF); // 24-bit RTS address.
+        if (strcmp(action, "commands") == 0)
+        {
+            pending.operation = Operation::GroupCommand;
+            json              = readJson(request, body, sizeof(body));
+            CBR(readCommand(json, pending.command));
+        }
+        else if (strcmp(action, "rename") == 0)
+        {
+            pending.operation = Operation::RenameGroup;
+            response          = R"({"error":"invalid_group_name"})";
+            json              = readJson(request, body, sizeof(body));
+            field             = cJSON_GetObjectItemCaseSensitive(json, "name");
+            CBR(cJSON_IsString(field));
+            CBR(field->valuestring[0] && strlen(field->valuestring) < sizeof(pending.name));
+            memcpy(pending.name, field->valuestring, strlen(field->valuestring));
+        }
+        else if (strcmp(action, "delete") == 0)
+        {
+            pending.operation = Operation::DeleteGroup;
+            response          = R"({"error":"unexpected_body"})";
+            CBR(request->content_len == 0);
+        }
+        else
+        {
+            status   = "404 Not Found";
+            response = R"({"error":"unknown_path"})";
+            CBR(false);
+        }
+    }
     else
     {
         status   = "404 Not Found";
         response = R"({"error":"unknown_blind_or_path"})";
-        CBR(parseBlindPath(request->uri, pending.blindId, action));
+        CBR(parseActionPath(request->uri, "/api/blinds/", 10, pending.blindId, action));
         xQueuePeek(m_snapshots, &snapshot, 0);
         CBR(pending.blindId <= snapshot.blinds.size());
         CBR(snapshot.blinds[pending.blindId - 1].address != 0);
@@ -568,21 +702,51 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
             status            = "400 Bad Request";
             response          = R"({"error":"invalid_command"})";
             json              = readJson(request, body, sizeof(body));
-            field             = cJSON_GetObjectItemCaseSensitive(json, "command");
+            CBR(readCommand(json, pending.command));
+        }
+        else if (strcmp(action, "rename") == 0)
+        {
+            pending.operation = Operation::RenameBlind;
+            status            = "400 Bad Request";
+            response          = R"({"error":"invalid_blind_name"})";
+            json              = readJson(request, body, sizeof(body));
+            field             = cJSON_GetObjectItemCaseSensitive(json, "name");
             CBR(cJSON_IsString(field));
-            if (strcmp(field->valuestring, "open") == 0)
+            CBR(field->valuestring[0] && strlen(field->valuestring) < sizeof(pending.name));
+            memcpy(pending.name, field->valuestring, strlen(field->valuestring));
+        }
+        else if (strcmp(action, "remove") == 0)
+        {
+            pending.operation = Operation::RemoveBlind;
+            status            = "400 Bad Request";
+            response          = R"({"error":"unexpected_body"})";
+            CBR(request->content_len == 0);
+        }
+        else if (strcmp(action, "remote") == 0)
+        {
+            pending.operation = Operation::SetRemote;
+            status            = "400 Bad Request";
+            response          = R"({"error":"invalid_remote_address"})";
+            json              = readJson(request, body, sizeof(body));
+            field             = cJSON_GetObjectItemCaseSensitive(json, "address");
+            CBR(cJSON_IsString(field));
+            if (field->valuestring[0])
             {
-                pending.command = SomfyController::Command::Open;
+                end    = field->valuestring + strlen(field->valuestring);
+                parsed = std::from_chars(field->valuestring, end, pending.remoteAddress, 16);
+                // RTS uses six hexadecimal digits per remote address.
+                CBR(end - field->valuestring == 6 && parsed.ec == std::errc{} && parsed.ptr == end &&
+                    pending.remoteAddress != 0 && pending.remoteAddress < 0xFFFFFF);
             }
-            else if (strcmp(field->valuestring, "close") == 0)
-            {
-                pending.command = SomfyController::Command::Close;
-            }
-            else
-            {
-                CBR(strcmp(field->valuestring, "my") == 0 || strcmp(field->valuestring, "stop") == 0);
-                pending.command = SomfyController::Command::My;
-            }
+        }
+        else if (strcmp(action, "calibrate") == 0)
+        {
+            pending.operation = Operation::SetTravelTimes;
+            status            = "400 Bad Request";
+            response          = R"({"error":"invalid_travel_times"})";
+            json              = readJson(request, body, sizeof(body));
+            CBR(readTravelTime(cJSON_GetObjectItemCaseSensitive(json, "openMs"), pending.openMs));
+            CBR(readTravelTime(cJSON_GetObjectItemCaseSensitive(json, "closeMs"), pending.closeMs));
         }
         else if (strcmp(action, "pair") == 0 || strcmp(action, "confirm") == 0)
         {

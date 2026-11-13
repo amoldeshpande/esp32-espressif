@@ -7,16 +7,18 @@
   :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
   body { margin: 2rem auto; max-width: 42rem; padding: 0 1rem; }
   section { border-top: 1px solid GrayText; margin-top: 1.5rem; padding-top: 1rem; }
-  h1, h2 { margin: 0 0 .8rem; }
+  h1, h2, h3 { margin: 0 0 .8rem; }
+  article { margin-top: 1rem; padding: .85rem; border: 1px solid GrayText; border-radius: .5rem; }
   input, button { font: inherit; padding: .5rem .7rem; }
   label { display: block; margin: .7rem 0; }
   label input { display: block; width: min(100%, 23rem); box-sizing: border-box; }
+  #remote-members input { display: inline; width: auto; }
   output { display: block; margin-top: .7rem; }
   .controls { display: flex; flex-wrap: wrap; gap: .5rem; }
 </style>
 <main>
   <h1>Somfy</h1>
-  <p id="network" role="status">Connecting to the ESP32…</p>
+  <p id="network" role="status">Connecting to the ESP32...</p>
   <p><a id="lan" hidden></a></p>
   <section id="setup" hidden>
     <h2>Join Wi-Fi</h2>
@@ -28,19 +30,26 @@
   </section>
   <div id="online" hidden>
     <section>
-      <h2>Paired blind</h2>
-      <p id="blind"></p>
-      <div class="controls">
-        <button type="button" data-command="open">Open</button>
-        <button type="button" data-command="close">Close</button>
-        <button type="button" data-command="stop">My / Stop</button>
-      </div>
+      <h2>Blinds</h2>
+      <form id="add-blind">
+        <label>Blind name<input id="blind-name" required maxlength="32"></label>
+        <button id="add-button">Add blind</button>
+      </form>
+      <div id="blinds"></div>
+      <div id="groups"></div>
     </section>
     <section>
       <h2>Remote discovery</h2>
       <button id="scan" type="button">Start 30-second scan</button>
       <p id="scan-status"></p>
       <ul id="remotes"></ul>
+      <form id="remote-group" hidden>
+        <h3 id="remote-group-title"></h3>
+        <p>Select the saved blinds controlled by this remote channel.</p>
+        <div id="remote-members"></div>
+        <button id="save-group">Save group</button>
+        <button id="cancel-group" type="button">Cancel</button>
+      </form>
     </section>
     <section>
       <h2>Wi-Fi</h2>
@@ -51,12 +60,16 @@
 </main>
 <script>
   const byId = id => document.getElementById(id);
-  const commands = Array.from(document.querySelectorAll('[data-command]'));
   let busy = false;
   let refreshing = false;
   let reopening = false;
-  let ready = false;
+  let lastBlindList = '';
   let setupSsid = '';
+  let savedBlinds = [];
+  let discoveryBlindId = null;
+  let groupAddress = '';
+  let openDiscoveredGroup = false;
+  let lastRemoteList = '';
 
   async function api(path, options) {
     const response = await fetch('/api' + path, {
@@ -71,24 +84,150 @@
     byId('join-button').disabled = busy;
     byId('scan').disabled = busy;
     byId('reopen').disabled = busy;
-    commands.forEach(button => { button.disabled = busy || !ready; });
+    byId('add-button').disabled = busy;
+    byId('save-group').disabled = busy;
+    byId('cancel-group').disabled = busy;
+    byId('remote-members').querySelectorAll('input').forEach(input => { input.disabled = busy; });
+    byId('online').querySelectorAll('button[data-unavailable]').forEach(button => {
+      button.disabled = busy || button.dataset.unavailable === 'true';
+    });
+  }
+
+  function blindButton(controls, label, unavailable, action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.dataset.unavailable = String(unavailable);
+    button.addEventListener('click', () => run(action));
+    controls.append(button);
+  }
+
+  function blindCard(blind) {
+    const card = document.createElement('article');
+    const heading = document.createElement('h3');
+    const detail = document.createElement('p');
+    const controls = document.createElement('div');
+    heading.textContent = blind.name;
+    controls.className = 'controls';
+    card.append(heading, detail, controls);
+
+    if (blind.pairing === 'paired') {
+      detail.textContent = 'Remote ' + blind.address + (blind.ready
+        ? ' - Paired. Use the controls to test movement.'
+        : ' - Paired. Control is unavailable. Check radio profile 1.');
+      blindButton(controls, 'Open', !blind.ready, () => sendCommand(blind, 'open'));
+      blindButton(controls, 'Close', !blind.ready, () => sendCommand(blind, 'close'));
+      blindButton(controls, 'My / Stop', !blind.ready, () => sendCommand(blind, 'stop'));
+    } else if (blind.pairing === 'awaiting_confirmation') {
+      detail.textContent = 'Confirm only if this blind jogged after the pairing signal. If it did not jog, put it into programming mode before retrying.';
+      blindButton(controls, 'Confirm motor jog', false, () => confirmPairing(blind));
+      blindButton(controls, 'Retry pairing', false, () => pairBlind(blind));
+    } else {
+      detail.textContent = 'Use the physical remote to put only this blind into programming mode, then send the pairing signal.';
+      blindButton(controls, 'Send pairing signal', false, () => pairBlind(blind));
+    }
+    const position = document.createElement('p');
+    position.dataset.blindPosition = blind.id;
+    card.append(position);
+    blindButton(controls, 'Rename', false, () => renameBlind(blind));
+    blindButton(controls, 'Discover remote for this blind', false, () => startDiscovery(blind.id));
+    blindButton(controls, 'Set travel times', false, () => setTravelTimes(blind));
+    blindButton(controls, 'Remove', false, () => removeBlind(blind));
+    return card;
+  }
+
+  function renderGroups(blinds) {
+    const groups = new Map();
+    for (const blind of blinds) {
+      if (!blind.remoteAddress) continue;
+      if (!groups.has(blind.remoteAddress)) groups.set(blind.remoteAddress, []);
+      groups.get(blind.remoteAddress).push(blind);
+    }
+    const cards = [];
+    for (const [address, members] of groups) {
+      const card = document.createElement('article');
+      const heading = document.createElement('h3');
+      const detail = document.createElement('p');
+      const controls = document.createElement('div');
+      heading.textContent = members[0].groupName || 'Remote group ' + address;
+      detail.textContent = members.map(blind => blind.name).join(', ');
+      controls.className = 'controls';
+      card.append(heading, detail, controls);
+      const unavailable = members.every(blind => !blind.ready);
+      blindButton(controls, 'Rename group', false, () => renameGroup(address, heading.textContent));
+      blindButton(controls, 'Delete group', false, () => deleteGroup(address, heading.textContent));
+      blindButton(controls, 'Edit members', false, () => editGroup(address, null));
+      blindButton(controls, 'Open group', unavailable, () => sendGroup(address, 'open'));
+      blindButton(controls, 'Close group', unavailable, () => sendGroup(address, 'close'));
+      blindButton(controls, 'My / Stop group', unavailable, () => sendGroup(address, 'stop'));
+      cards.push(card);
+    }
+    byId('groups').replaceChildren(...cards);
+  }
+
+  async function readBlinds() {
+    const blinds = await api('/blinds', {});
+    savedBlinds = blinds;
+    const list = JSON.stringify(blinds.map(blind => ({ ...blind, position: null })));
+    // Keep keyboard focus in place when a poll returns the same blinds.
+    if (list !== lastBlindList) {
+      byId('blinds').replaceChildren(...blinds.map(blindCard));
+      renderGroups(blinds);
+      lastBlindList = list;
+    }
+    for (const blind of blinds) {
+      const position = byId('blinds').querySelector('[data-blind-position="' + blind.id + '"]');
+      position.textContent = !blind.openMs || !blind.closeMs
+        ? 'Set full opening and closing times to estimate position.'
+        : blind.position == null ? 'Estimated position: unknown.' : 'Estimated position: ' + blind.position + '% open.';
+    }
+    updateButtons();
   }
 
   async function readControls() {
-    const [blind] = await api('/blinds', {});
-    ready = Boolean(blind?.ready);
-    byId('blind').textContent = blind
-      ? 'Virtual remote ' + blind.address + (ready ? ' is ready.' : ' is unavailable.')
-      : 'No paired blind listed.';
+    await readBlinds();
     const scan = await api('/discovery', {});
     byId('scan-status').textContent = scan.active ? 'Listening. Press a button on the physical remote.' :
       scan.remotes.length ? 'Scan complete.' : 'No remotes found.';
     if (scan.overflow) byId('scan-status').textContent += ' The remote list is full.';
-    byId('remotes').replaceChildren(...scan.remotes.map(remote => {
-      const row = document.createElement('li');
-      row.textContent = remote.address + ' · ' + remote.bits + '-bit RTS · command ' + remote.command;
-      return row;
+    const addresses = scan.remotes.map(remote => remote.address);
+    const list = JSON.stringify(addresses);
+    // Leave discovery buttons in place when repeated frames change only command details.
+    if (list !== lastRemoteList) {
+      byId('remotes').replaceChildren(...addresses.map(address => {
+        const row = document.createElement('li');
+        blindButton(row, 'Assign blinds to ' + address, false, () => editGroup(address, discoveryBlindId));
+        return row;
+      }));
+      lastRemoteList = list;
+    }
+    if (openDiscoveredGroup && addresses.length === 1 && savedBlinds.length) {
+      openDiscoveredGroup = false;
+      editGroup(addresses[0], discoveryBlindId);
+    }
+    if (!scan.active) openDiscoveredGroup = false;
+    updateButtons();
+  }
+
+  function editGroup(address, preselectedId) {
+    openDiscoveredGroup = false;
+    groupAddress = address;
+    const member = savedBlinds.find(blind => blind.remoteAddress === address);
+    byId('remote-group-title').textContent = member?.groupName || 'Remote group ' + address;
+    byId('remote-members').replaceChildren(...savedBlinds.map(blind => {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.value = blind.id;
+      input.dataset.address = blind.address;
+      input.checked = blind.remoteAddress === address || blind.id === preselectedId;
+      label.append(input, ' ' + blind.name + (blind.remoteAddress && blind.remoteAddress !== address
+        ? ' (currently in ' + blind.remoteAddress + ')' : ''));
+      return label;
     }));
+    byId('remote-group').hidden = false;
+    updateButtons();
+    byId('remote-group').scrollIntoView({ block: 'nearest' });
   }
 
   async function refresh() {
@@ -99,7 +238,7 @@
     const messages = {
       setup: state.error === 'join_failed' ? 'Could not join Wi-Fi. Check the network name and password.' :
         state.error === 'save_failed' ? 'Connected, but the ESP32 could not save the network.' : 'Choose your home Wi-Fi network.',
-      joining: 'Joining Wi-Fi…',
+      joining: 'Joining Wi-Fi...',
       joined: 'Wi-Fi connected. Switch to your home network and open the address below.',
       online: 'Connected to Wi-Fi.',
       reopening: 'Join ' + setupSsid + ' and open http://192.168.4.1/.',
@@ -121,7 +260,7 @@
       refreshing = true;
       try { await refresh(); }
       catch {
-        if (byId('lan').hidden) byId('network').textContent = 'Waiting for the ESP32…';
+        if (byId('lan').hidden) byId('network').textContent = 'Waiting for the ESP32...';
       }
       finally { refreshing = false; }
     }
@@ -144,7 +283,7 @@
     const deadline = performance.now() + 5000;
     while (performance.now() < deadline) {
       const result = await api('/requests/' + requestId, {});
-      if (result.result !== 'pending') return result.result;
+      if (result.result !== 'pending') return result;
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     throw new Error('Result unavailable. Check the blind before retrying.');
@@ -159,7 +298,7 @@
       });
       byId('password').value = '';
       byId('setup').hidden = true;
-      byId('network').textContent = 'Joining Wi-Fi…';
+      byId('network').textContent = 'Joining Wi-Fi...';
     });
   });
 
@@ -170,27 +309,200 @@
     byId('network').textContent = 'Join the open ' + setupSsid + ' network and visit http://192.168.4.1/.';
   }));
 
-  byId('scan').addEventListener('click', () => run(async () => {
+  async function startDiscovery(blindId) {
+    byId('remote-group').hidden = true;
+    byId('remotes').scrollIntoView({ block: 'nearest' });
     const { requestId } = await api('/discovery', { method: 'POST' });
-    const result = await waitForResult(requestId);
+    const { result } = await waitForResult(requestId);
     if (result !== 'discovery_started') throw new Error('The scan did not start.');
+    discoveryBlindId = blindId;
+    openDiscoveredGroup = true;
     await readControls();
-  }));
+  }
 
-  commands.forEach(button => button.addEventListener('click', () => run(async () => {
-    const { requestId } = await api('/blinds/1/commands', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command: button.dataset.command })
-    });
-    const result = await waitForResult(requestId);
+  byId('scan').addEventListener('click', () => run(() => startDiscovery(null)));
+
+  async function submitRequest(path, options) {
+    const { requestId } = await api(path, options);
+    return waitForResult(requestId);
+  }
+
+  async function pairBlind(blind) {
+    byId('result').textContent = blind.name + ': sending pairing signal...';
+    const { result } = await submitRequest('/blinds/' + blind.id + '/pair', { method: 'POST' });
+    const message = result === 'transmitted'
+      ? 'Pairing signal sent. Confirm only if the motor jogged.'
+      : radioMessage(result);
+    byId('result').textContent = blind.name + ': ' + message;
+    await readBlinds();
+  }
+
+  async function confirmPairing(blind) {
+    const { result } = await submitRequest('/blinds/' + blind.id + '/confirm', { method: 'POST' });
+    byId('result').textContent = blind.name + (result === 'pairing_confirmed'
+      ? ': pairing saved. Test the blind using Open, Close, or My / Stop.'
+      : ': pairing could not be confirmed. Refresh the blind status and check the pairing signal.');
+    await readBlinds();
+  }
+
+  function radioMessage(result) {
     const messages = {
-      transmitted: 'Radio transmission completed.',
-      not_sent: 'Command was not transmitted.',
+      transmitted: 'Radio transmission completed. Check that this blind responded.',
+      not_sent: 'Command was not transmitted. Check radio profile 1 and the blind status.',
       transmission_uncertain: 'Transmission incomplete. Check the blind before retrying.',
       transmitted_with_cleanup_error: 'Transmission completed, but radio cleanup failed.'
     };
+    return messages[result] || result;
+  }
+
+  async function sendCommand(blind, command) {
+    byId('result').textContent = blind.name + ': sending ' + command + '...';
+    const { result } = await submitRequest('/blinds/' + blind.id + '/commands', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command })
+    });
+    byId('result').textContent = blind.name + ': ' + radioMessage(result);
+    await readBlinds();
+  }
+
+  async function changeBlind(blind, action, body, expected) {
+    const options = { method: 'POST' };
+    if (body !== null) {
+      options.headers = { 'Content-Type': 'application/json' };
+      options.body = JSON.stringify(body);
+    }
+    const { result } = await submitRequest('/blinds/' + blind.id + '/' + action, options);
+    if (result !== expected) throw new Error('Could not save change: ' + result);
+    byId('result').textContent = 'Change saved.';
+    await readBlinds();
+  }
+
+  async function renameBlind(blind) {
+    const entered = prompt('Blind name', blind.name);
+    if (entered === null) return;
+    const name = entered.trim();
+    if (!name || new TextEncoder().encode(name).length > 32) {
+      throw new Error('Enter a blind name between 1 and 32 bytes.');
+    }
+    await changeBlind(blind, 'rename', { name }, 'blind_renamed');
+  }
+
+  async function removeBlind(blind) {
+    if (confirm('Remove ' + blind.name + ' from this bridge? Its motor pairing will remain.')) {
+      await changeBlind(blind, 'remove', null, 'blind_removed');
+    }
+  }
+
+  byId('cancel-group').addEventListener('click', () => {
+    byId('remote-group').hidden = true;
+    openDiscoveredGroup = false;
+  });
+
+  byId('remote-group').addEventListener('submit', event => {
+    event.preventDefault();
+    run(async () => {
+      const inputs = Array.from(byId('remote-members').querySelectorAll('input'));
+      const blinds = await api('/blinds', {});
+      const changes = [];
+      for (const input of inputs) {
+        const blind = blinds.find(entry => String(entry.id) === input.value && entry.address === input.dataset.address);
+        if (!blind) throw new Error('The blind list changed. Reopen the group and try again.');
+        if (input.checked && blind.remoteAddress !== groupAddress) {
+          changes.push({ id: blind.id, address: groupAddress });
+        } else if (!input.checked && blind.remoteAddress === groupAddress) {
+          changes.push({ id: blind.id, address: '' });
+        }
+      }
+      let saved = 0;
+      try {
+        for (const change of changes) {
+          const { result } = await submitRequest('/blinds/' + change.id + '/remote', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address: change.address })
+          });
+          if (result !== 'remote_saved') throw new Error(result);
+          ++saved;
+        }
+      } catch (error) {
+        throw new Error('Saved ' + saved + ' of ' + changes.length + ' changes. Retry saving to apply the rest.');
+      }
+      byId('remote-group').hidden = true;
+      byId('result').textContent = 'Group membership saved.';
+      await readBlinds();
+    });
+  });
+
+  async function setTravelTimes(blind) {
+    const opening = prompt('Full opening time in seconds', blind.openMs ? blind.openMs / 1000 : '');
+    if (opening === null) return;
+    const closing = prompt('Full closing time in seconds', blind.closeMs ? blind.closeMs / 1000 : '');
+    if (closing === null) return;
+    const openMs = Math.round(Number(opening) * 1000);
+    const closeMs = Math.round(Number(closing) * 1000);
+    if (![openMs, closeMs].every(ms => Number.isFinite(ms) && ms >= 1 && ms <= 600000)) {
+      throw new Error('Enter opening and closing times between 0.001 and 600 seconds.');
+    }
+    await changeBlind(blind, 'calibrate', { openMs, closeMs }, 'travel_times_saved');
+    byId('result').textContent = 'Travel times saved. Run a full Open or Close to establish an estimate.';
+  }
+
+  async function renameGroup(address, currentName) {
+    const entered = prompt('Group name', currentName);
+    if (entered === null) return;
+    const name = entered.trim();
+    if (!name || new TextEncoder().encode(name).length > 32) {
+      throw new Error('Enter a group name between 1 and 32 bytes.');
+    }
+    const { result } = await submitRequest('/groups/' + address + '/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    if (result !== 'group_renamed') throw new Error('Could not save group name.');
+    byId('result').textContent = 'Group name saved.';
+    await readBlinds();
+  }
+
+  async function deleteGroup(address, name) {
+    if (!confirm('Delete ' + name + ' and unlink its blinds? The blinds will stay paired.')) return;
+    const { result } = await submitRequest('/groups/' + address + '/delete', { method: 'POST' });
+    if (groupAddress === address) byId('remote-group').hidden = true;
+    await readBlinds();
+    if (result !== 'group_deleted') throw new Error('Could not fully delete group. Check its remaining members.');
+    byId('result').textContent = 'Group deleted.';
+  }
+
+  async function sendGroup(address, command) {
+    const { result } = await submitRequest('/groups/' + address + '/commands', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command })
+    });
+    const messages = {
+      group_transmitted: 'Commands transmitted to all group members.',
+      group_partially_transmitted: 'Only some group commands transmitted. Check each blind.',
+      group_not_transmitted: 'No group commands completed. Check each blind before retrying.'
+    };
     byId('result').textContent = messages[result] || result;
-  })));
+    await readBlinds();
+  }
+
+  byId('add-blind').addEventListener('submit', event => {
+    event.preventDefault();
+    run(async () => {
+      const input = byId('blind-name');
+      const name = input.value.trim();
+      if (!name || new TextEncoder().encode(name).length > 32) {
+        throw new Error('Enter a blind name between 1 and 32 bytes.');
+      }
+      const { result } = await submitRequest('/blinds', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      if (result !== 'blind_created') throw new Error('Could not save the blind. Check the registry and try again.');
+      input.value = '';
+      byId('result').textContent = name + ' added. Follow its pairing instructions.';
+      await readBlinds();
+    });
+  });
 
   poll();
   setInterval(poll, 1000);

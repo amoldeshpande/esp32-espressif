@@ -28,6 +28,12 @@ class SomfyController final
     using Pairing                           = SomfyTransmitter::Pairing;
     static constexpr uint32_t kFirstBlindId = 1; // Legacy serial controls and Wi-Fi setup identity.
 
+    struct GroupResult
+    {
+        unsigned members;
+        unsigned transmitted;
+    };
+
     struct Remote
     {
         uint32_t address;
@@ -50,6 +56,14 @@ class SomfyController final
     bool                       Init(gpio_num_t txPin);
     bool                       RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps, bool transmitProfile);
     uint32_t                   AddBlind(const char *name);
+    bool                       RenameBlind(uint32_t id, const char *name);
+    bool                       RemoveBlind(uint32_t id);
+    bool                       RenameGroup(uint32_t address, const char *name);
+    bool                       DeleteGroup(uint32_t address);
+    bool                       SetRemote(uint32_t id, uint32_t address);
+    bool                       SetTravelTimes(uint32_t id, uint32_t openMs, uint32_t closeMs);
+    GroupResult                SendGroup(uint32_t address, Command command);
+    int                        Position(uint32_t id) const; // 0 closed, 100 open, -1 unknown.
     bool                       ConfirmPairing(uint32_t id);
     Result                     Send(uint32_t id, Command command);
     Status                     GetStatus(uint32_t id) const;
@@ -68,5 +82,15 @@ class SomfyController final
     Discovery                m_discovery;
     uint64_t                 m_discoveryStartMs = 0;
 
-    bool                     discoveryActive(uint64_t nowMs) const;
+    struct Motion
+    {
+        int      start     = -1;
+        uint64_t since     = 0;
+        Command  direction = Command::My;
+    };
+
+    std::array<Motion, Blinds{}.size()> m_motion{};
+    void                                trackCommand(uint32_t id, Command command, Result result, uint64_t nowMs);
+    int                                 position(uint32_t id, uint64_t nowMs) const;
+    bool                                discoveryActive(uint64_t nowMs) const;
 };

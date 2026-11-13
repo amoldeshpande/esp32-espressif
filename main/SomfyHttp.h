@@ -35,7 +35,14 @@ class SomfyHttp final
         Command,
         Discovery,
         CreateBlind,
-        ConfirmPairing
+        ConfirmPairing,
+        RenameBlind,
+        RemoveBlind,
+        SetRemote,
+        SetTravelTimes,
+        GroupCommand,
+        RenameGroup,
+        DeleteGroup
     };
     struct Request
     {
@@ -43,6 +50,9 @@ class SomfyHttp final
         Operation                operation;
         SomfyController::Command command;
         uint32_t                 blindId;
+        uint32_t                 remoteAddress;
+        uint32_t                 openMs;
+        uint32_t                 closeMs;
         char                     name[sizeof(SomfyController::Status::name)];
     };
 
@@ -55,11 +65,12 @@ class SomfyHttp final
 
     struct Snapshot
     {
-        SomfyController::Blinds    blinds;
-        SomfyController::Discovery discovery;
+        SomfyController::Blinds                           blinds;
+        std::array<int, SomfyController::Blinds{}.size()> positions;
+        SomfyController::Discovery                        discovery;
         // Keep the latest 16 completed requests in RAM. Only the radio task writes these.
-        std::array<Completion, 16> completions;
-        uint32_t                   lastCompletedId;
+        std::array<Completion, 16>                        completions;
+        uint32_t                                          lastCompletedId;
     };
 
     static esp_err_t handleRequest(httpd_req_t *request);

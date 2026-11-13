@@ -47,7 +47,8 @@ class SomfyTransmitter final
     {
         Unpaired,
         AwaitingConfirmation,
-        Paired
+        Paired,
+        Removed
     };
 
     struct Status
@@ -57,6 +58,10 @@ class SomfyTransmitter final
         bool     ready;
         Pairing  pairing;
         char     name[33]; // Up to 32 bytes of UTF-8 plus the terminator.
+        uint32_t remoteAddress;
+        uint32_t openMs;
+        uint32_t closeMs;
+        char     groupName[sizeof(name)];
     };
 
     // Bound the initial registry to eight blinds, with IDs starting at one.
@@ -64,6 +69,12 @@ class SomfyTransmitter final
 
     bool     Init(gpio_num_t txPin);
     uint32_t AddBlind(const char *name);
+    bool     RenameBlind(uint32_t id, const char *name);
+    bool     RemoveBlind(uint32_t id);
+    bool     RenameGroup(uint32_t address, const char *name);
+    bool     DeleteGroup(uint32_t address);
+    bool     SetRemote(uint32_t id, uint32_t address);
+    bool     SetTravelTimes(uint32_t id, uint32_t openMs, uint32_t closeMs);
     bool     ConfirmPairing(uint32_t id);
     Result   Send(TI_CC1101::CC1101Device &radio, uint32_t id, Command command);
     Status   GetStatus(uint32_t id) const;
@@ -76,8 +87,20 @@ class SomfyTransmitter final
         uint32_t nextCode; // Wider than the wire counter so exhaustion never wraps to zero.
         Pairing  pairing;
         char     name[sizeof(Status::name)];
+        uint32_t remoteAddress;
+        uint32_t openMs;
+        uint32_t closeMs;
     };
 
+    struct GroupName
+    {
+        uint32_t address;
+        char     name[sizeof(Status::name)];
+    };
+    using GroupNames = std::array<GroupName, Blinds{}.size()>;
+    bool                                hasGroup(uint32_t address) const;
+
+    bool                                exists(uint32_t id) const;
     bool                                loadBlinds();
     bool                                migrateFirstBlind();
     uint32_t                            createBlind(const char *name);
@@ -90,7 +113,9 @@ class SomfyTransmitter final
     rmt_channel_handle_t                m_channel = nullptr;
     rmt_encoder_handle_t                m_encoder = nullptr;
     std::array<Record, Blinds{}.size()> m_blinds{};
-    bool                                m_ready = false;
+    GroupNames                          m_groupNames{};
+    bool                                m_ready         = false;
+    bool                                m_storageFailed = false;
     // Standard RTS payload: key, command/checksum, two-byte rolling code, three-byte address.
     std::array<uint8_t, 7>              m_frame{};
     // Wake-up, seven hardware syncs, software sync, 56 Manchester bits, and silence.

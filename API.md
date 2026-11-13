@@ -20,7 +20,7 @@ A blind record looks like this:
 {"id":2,"name":"Kitchen","address":"97E360","pairing":"paired","ready":true}
 ```
 
-The registry holds up to eight blinds. Names must be 1 to 32 bytes. IDs are numeric and persist across reboot. The address is the six-digit hexadecimal address of the ESP32's virtual remote. Pairing is `unpaired`, `awaiting_confirmation`, or `paired`. Check `ready` before sending movement commands.
+The registry holds up to eight blinds. Names must be 1 to 32 bytes. IDs are numeric and persist across reboot while the blind is saved. The address is the six-digit hexadecimal address of the ESP32's virtual remote. Pairing is `unpaired`, `awaiting_confirmation`, or `paired`. Check `ready` before sending movement commands.
 
 Commands are `open`, `close`, `my`, and `stop`. Both `my` and `stop` send RTS My, which stops a moving blind or requests its stored favorite position when idle. Radio transmission requires profile 1.
 
@@ -33,6 +33,26 @@ Discovery returns:
 ```
 
 Press a physical remote button during the scan. The list keeps the latest decoded frame for each of up to 16 addresses. Results remain after the scan ends and are cleared when the next scan starts. An observed address identifies a transmitter, which may control multiple blinds.
+
+## Manage blinds and remote groups
+
+| Method and path | Body | Completed results |
+| --- | --- | --- |
+| `POST /api/blinds/{blindId}/rename` | `{"name":"Kitchen east"}` | `blind_renamed` or `rename_failed` |
+| `POST /api/blinds/{blindId}/remove` | Empty | `blind_removed` or `remove_failed` |
+| `POST /api/blinds/{blindId}/remote` | `{"address":"ED673D"}` | `remote_saved` or `remote_save_failed` |
+| `POST /api/blinds/{blindId}/calibrate` | `{"openMs":18000,"closeMs":20000}` | `travel_times_saved` or `travel_times_save_failed` |
+| `POST /api/groups/{remoteAddress}/commands` | `{"command":"close"}` | `group_transmitted`, `group_partially_transmitted`, or `group_not_transmitted` |
+| `POST /api/groups/{remoteAddress}/rename` | `{"name":"All blinds"}` | `group_renamed` or `group_rename_failed` |
+| `POST /api/groups/{remoteAddress}/delete` | Empty | `group_deleted` or `group_delete_failed` |
+
+Use the six-digit hexadecimal physical remote address from discovery. Assign the same address to each blind in a group. Set `address` to an empty string to unlink a blind. Group commands send sequentially through the member blinds' virtual remotes. A group result summarizes completed bursts. A member whose burst did not complete may still have moved.
+
+Group names are 1 to 32 bytes. Deleting a group clears its name and unlinks its blinds. If deletion fails partway, read the blind list and retry to unlink remaining members.
+
+Removing an entry leaves the motor's pairing in place. The freed blind ID can be assigned to a new blind, so refresh the blind list after removal. Renaming preserves the blind's pairing and address.
+
+Each blind includes `remoteAddress` (empty if unlinked), `groupName` (empty if unnamed), `openMs`, `closeMs`, and `position`. Travel times are full-run durations in integer milliseconds from 1 to 600000. A zero duration in the response means calibration is missing. Position is estimated as percent open from 0 to 100, or `null` if unknown. Run a full Open or Close after calibration or reboot to establish an endpoint estimate. A command heard from the linked physical remote invalidates the estimate. Movement the bridge does not hear can make the estimate inaccurate.
 
 ## Track a request
 
