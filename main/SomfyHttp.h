@@ -40,6 +40,7 @@ class SomfyHttp final
         RemoveBlind,
         SetRemote,
         SetTravelTimes,
+        SetPosition,
         GroupCommand,
         RenameGroup,
         DeleteGroup
@@ -53,6 +54,7 @@ class SomfyHttp final
         uint32_t                 remoteAddress;
         uint32_t                 openMs;
         uint32_t                 closeMs;
+        int                      percent;
         char                     name[sizeof(SomfyController::Status::name)];
     };
 
@@ -67,6 +69,7 @@ class SomfyHttp final
     {
         SomfyController::Blinds                           blinds;
         std::array<int, SomfyController::Blinds{}.size()> positions;
+        std::array<int, SomfyController::Blinds{}.size()> targets;
         SomfyController::Discovery                        discovery;
         // Keep the latest 16 completed requests in RAM. Only the radio task writes these.
         std::array<Completion, 16>                        completions;
@@ -88,4 +91,5 @@ class SomfyHttp final
     SomfyNetwork     m_network;
     uint32_t         m_lastAcceptedId = 0; // HTTP task only.
     Snapshot         m_snapshot{};         // Radio task only.
+    Snapshot         m_httpSnapshot{};     // HTTP task only. Keep the queue copy off the task stack.
 };

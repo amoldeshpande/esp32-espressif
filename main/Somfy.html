@@ -118,6 +118,7 @@
       blindButton(controls, 'Open', !blind.ready, () => sendCommand(blind, 'open'));
       blindButton(controls, 'Close', !blind.ready, () => sendCommand(blind, 'close'));
       blindButton(controls, 'My / Stop', !blind.ready, () => sendCommand(blind, 'stop'));
+      blindButton(controls, 'Set position', !blind.ready, () => setPosition(blind.id));
     } else if (blind.pairing === 'awaiting_confirmation') {
       detail.textContent = 'Confirm only if this blind jogged after the pairing signal. If it did not jog, put it into programming mode before retrying.';
       blindButton(controls, 'Confirm motor jog', false, () => confirmPairing(blind));
@@ -168,7 +169,7 @@
   async function readBlinds() {
     const blinds = await api('/blinds', {});
     savedBlinds = blinds;
-    const list = JSON.stringify(blinds.map(blind => ({ ...blind, position: null })));
+    const list = JSON.stringify(blinds.map(blind => ({ ...blind, position: null, targetPosition: null })));
     // Keep keyboard focus in place when a poll returns the same blinds.
     if (list !== lastBlindList) {
       byId('blinds').replaceChildren(...blinds.map(blindCard));
@@ -180,6 +181,7 @@
       position.textContent = !blind.openMs || !blind.closeMs
         ? 'Set full opening and closing times to estimate position.'
         : blind.position == null ? 'Estimated position: unknown.' : 'Estimated position: ' + blind.position + '% open.';
+      if (blind.targetPosition != null) position.textContent += ' Target: ' + blind.targetPosition + '% open.';
     }
     updateButtons();
   }
@@ -353,6 +355,29 @@
       transmitted_with_cleanup_error: 'Transmission completed, but radio cleanup failed.'
     };
     return messages[result] || result;
+  }
+
+  async function setPosition(id) {
+    const blind = savedBlinds.find(entry => entry.id === id);
+    const entered = prompt('Percent open (0 closed, 100 open)', blind.position ?? '');
+    if (entered === null) return;
+    if (!/^\d{1,3}$/.test(entered.trim()) || Number(entered) > 100) {
+      throw new Error('Enter a whole percentage from 0 to 100.');
+    }
+    const { result } = await submitRequest('/blinds/' + id + '/position', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: Number(entered) })
+    });
+    const messages = {
+      position_started: 'Movement started. Check the estimated position.',
+      position_unchanged: 'Already at the estimated target.',
+      position_busy: 'Wait for the active timed move or stop that blind.',
+      position_unavailable: 'Check radio readiness and calibration. Run a full Open or Close first.',
+      position_too_close: 'Target is too close for a timed move.',
+      position_not_started: 'The bridge could not schedule the move. Check the blind before retrying.'
+    };
+    byId('result').textContent = blind.name + ': ' + (messages[result] || result);
+    await readBlinds();
   }
 
   async function sendCommand(blind, command) {

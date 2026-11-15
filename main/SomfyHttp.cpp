@@ -54,6 +54,8 @@ bool SomfyHttp::Start(uint64_t nowMs)
 
     CBR(m_network.Start(m_controller.GetStatus(SomfyController::kFirstBlindId).address, nowMs));
     publish(nowMs);
+    // Leave room for HTTP parsing, JSON encoding, and ESP-IDF logging.
+    server.stack_size        = 8 * 1024; // 8 KiB, above the ESP-IDF default of 4 KiB.
     server.uri_match_fn      = httpd_uri_match_wildcard;
     // Bound how long an idle client can hold the single HTTP task.
     server.recv_wait_timeout = 2;
@@ -105,6 +107,7 @@ void SomfyHttp::publish(uint64_t nowMs)
         for (uint32_t id = 1; id <= m_snapshot.blinds.size(); ++id)
         {
             m_snapshot.positions[id - 1] = m_controller.Position(id);
+            m_snapshot.targets[id - 1]   = m_controller.TargetPosition(id);
         }
         m_snapshot.discovery = m_controller.GetDiscovery(nowMs);
         xQueueOverwrite(m_snapshots, &m_snapshot);
@@ -153,6 +156,9 @@ void SomfyHttp::Poll(uint64_t nowMs)
                     completion.setupResult = m_controller.SetRemote(request.blindId, request.remoteAddress)
                                                  ? "remote_saved"
                                                  : "remote_save_failed";
+                    break;
+                case Operation::SetPosition:
+                    completion.setupResult = m_controller.SetPosition(request.blindId, request.percent);
                     break;
                 case Operation::SetTravelTimes:
                     completion.setupResult = m_controller.SetTravelTimes(request.blindId, request.openMs, request.closeMs)
@@ -450,7 +456,7 @@ esp_err_t SomfyHttp::getRequest(httpd_req_t *request, const char *suffix, const 
     return result;
 }
 
-static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds &blinds, const int *positions)
+static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds &blinds, const int *positions, const int *targets)
 {
     bool                           bRet = true;
     cJSON                         *list = cJSON_CreateArray();
@@ -503,6 +509,14 @@ static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds 
         {
             CBR(cJSON_AddNumberToObject(item, "position", positions[id - 1]));
         }
+        if (targets[id - 1] < 0)
+        {
+            CBR(cJSON_AddNullToObject(item, "targetPosition"));
+        }
+        else
+        {
+            CBR(cJSON_AddNumberToObject(item, "targetPosition", targets[id - 1]));
+        }
         CBR(cJSON_AddBoolToObject(item, "ready", blind->ready));
     }
     json = cJSON_PrintUnformatted(list);
@@ -524,31 +538,30 @@ Error:
 
 esp_err_t SomfyHttp::get(httpd_req_t *request)
 {
-    Snapshot                       snapshot{};
     esp_err_t                      result = ESP_OK;
     char                           body[160]; // A single blind, request, or remote record.
     const char                     requestPrefix[] = "/api/requests/";
     const SomfyController::Remote *remote;
 
-    xQueuePeek(m_snapshots, &snapshot, 0);
+    xQueuePeek(m_snapshots, &m_httpSnapshot, 0);
     if (strcmp(request->uri, "/api/blinds") == 0)
     {
-        result = sendBlinds(request, snapshot.blinds, snapshot.positions.data());
+        result = sendBlinds(request, m_httpSnapshot.blinds, m_httpSnapshot.positions.data(), m_httpSnapshot.targets.data());
     }
     else if (strncmp(request->uri, requestPrefix, sizeof(requestPrefix) - 1) == 0)
     {
-        result = getRequest(request, request->uri + sizeof(requestPrefix) - 1, snapshot);
+        result = getRequest(request, request->uri + sizeof(requestPrefix) - 1, m_httpSnapshot);
     }
     else if (strcmp(request->uri, "/api/discovery") == 0)
     {
         httpd_resp_set_type(request, "application/json");
         httpd_resp_set_hdr(request, "Cache-Control", "no-store");
         snprintf(body, sizeof(body), R"({"active":%s,"overflow":%s,"remotes":[)",
-                 snapshot.discovery.active ? "true" : "false", snapshot.discovery.overflow ? "true" : "false");
+                 m_httpSnapshot.discovery.active ? "true" : "false", m_httpSnapshot.discovery.overflow ? "true" : "false");
         result = httpd_resp_sendstr_chunk(request, body);
-        for (unsigned i = 0; i < snapshot.discovery.count && result == ESP_OK; ++i)
+        for (unsigned i = 0; i < m_httpSnapshot.discovery.count && result == ESP_OK; ++i)
         {
-            remote = &snapshot.discovery.remotes[i];
+            remote = &m_httpSnapshot.discovery.remotes[i];
             snprintf(body, sizeof(body), R"(%s{"address":"%06)" PRIX32 R"(","command":%u,"rollingCode":%u,"bits":%u})",
                      i == 0 ? "" : ",", remote->address, remote->command, remote->rollingCode, remote->bitCount);
             result = httpd_resp_sendstr_chunk(request, body);
@@ -637,7 +650,6 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
     cJSON                 *json = nullptr;
     const cJSON           *field;
     const char            *action;
-    Snapshot               snapshot{};
     const char            *end;
     std::from_chars_result parsed{};
 
@@ -693,9 +705,9 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
         status   = "404 Not Found";
         response = R"({"error":"unknown_blind_or_path"})";
         CBR(parseActionPath(request->uri, "/api/blinds/", 10, pending.blindId, action));
-        xQueuePeek(m_snapshots, &snapshot, 0);
-        CBR(pending.blindId <= snapshot.blinds.size());
-        CBR(snapshot.blinds[pending.blindId - 1].address != 0);
+        xQueuePeek(m_snapshots, &m_httpSnapshot, 0);
+        CBR(pending.blindId <= m_httpSnapshot.blinds.size());
+        CBR(m_httpSnapshot.blinds[pending.blindId - 1].address != 0);
         if (strcmp(action, "commands") == 0)
         {
             pending.operation = Operation::Command;
@@ -738,6 +750,19 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
                 CBR(end - field->valuestring == 6 && parsed.ec == std::errc{} && parsed.ptr == end &&
                     pending.remoteAddress != 0 && pending.remoteAddress < 0xFFFFFF);
             }
+        }
+        else if (strcmp(action, "position") == 0)
+        {
+            pending.operation = Operation::SetPosition;
+            status            = "400 Bad Request";
+            response          = R"({"error":"invalid_position"})";
+            json              = readJson(request, body, sizeof(body));
+            field             = cJSON_GetObjectItemCaseSensitive(json, "position");
+            CBR(cJSON_IsNumber(field));
+            // Accept whole percentages from fully closed to fully open.
+            CBR(field->valuedouble >= 0 && field->valuedouble <= 100);
+            pending.percent = static_cast<int>(field->valuedouble);
+            CBR(pending.percent == field->valuedouble);
         }
         else if (strcmp(action, "calibrate") == 0)
         {

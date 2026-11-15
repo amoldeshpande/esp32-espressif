@@ -54,6 +54,14 @@ Removing an entry leaves the motor's pairing in place. The freed blind ID can be
 
 Each blind includes `remoteAddress` (empty if unlinked), `groupName` (empty if unnamed), `openMs`, `closeMs`, and `position`. Travel times are full-run durations in integer milliseconds from 1 to 600000. A zero duration in the response means calibration is missing. Position is estimated as percent open from 0 to 100, or `null` if unknown. Run a full Open or Close after calibration or reboot to establish an endpoint estimate. A command heard from the linked physical remote invalidates the estimate. Movement the bridge does not hear can make the estimate inaccurate.
 
+## Move to a position
+
+Send `POST /api/blinds/{blindId}/position` with `{"position":50}`, using a whole percentage from 0 (closed) to 100 (open). Targets of 0 and 100 send full Close or Open. Intermediate targets require calibrated opening and closing times and a known estimate. Run a full Open or Close to establish an estimate after reboot or calibration.
+
+Poll the request ID for `position_started`, `position_unchanged`, `position_busy`, `position_unavailable`, `position_too_close`, or `position_not_started`. The started result means the movement command was sent. Read `GET /api/blinds` for the estimate and the active `targetPosition`, which is null when no timed stop is scheduled. RTS provides no position feedback.
+
+Only one timed move runs at a time. The bridge reserves the radio for that move until it sends My/Stop or the linked physical remote is heard. My/Stop on the moving blind can end the move early. Moves shorter than 500 ms are rejected. If the scheduled stop fails, the position becomes unknown.
+
 ## Track a request
 
 Queued operations return HTTP `202 Accepted` with `{"requestId":42}`. Poll `GET /api/requests/42` with that ID. A successful lookup returns HTTP 200 and the request ID and result.

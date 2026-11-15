@@ -64,6 +64,9 @@ class SomfyController final
     bool                       SetTravelTimes(uint32_t id, uint32_t openMs, uint32_t closeMs);
     GroupResult                SendGroup(uint32_t address, Command command);
     int                        Position(uint32_t id) const; // 0 closed, 100 open, -1 unknown.
+    const char                *SetPosition(uint32_t id, int percent);
+    void                       PollPosition(uint64_t nowMs);
+    int                        TargetPosition(uint32_t id) const;
     bool                       ConfirmPairing(uint32_t id);
     Result                     Send(uint32_t id, Command command);
     Status                     GetStatus(uint32_t id) const;
@@ -81,6 +84,11 @@ class SomfyController final
     bool                     m_transmitProfile = true;
     Discovery                m_discovery;
     uint64_t                 m_discoveryStartMs = 0;
+
+    // One timed move at a time on the shared radio.
+    uint32_t                 m_targetBlind      = 0;
+    int                      m_targetPercent    = -1;
+    uint64_t                 m_stopAtMs         = 0;
 
     struct Motion
     {

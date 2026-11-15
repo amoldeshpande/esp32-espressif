@@ -211,6 +211,7 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
                 now              = xTaskGetTickCount();
                 lastReport       = now;
             }
+            controller.PollPosition(monotonicMs());
             http.Poll(monotonicMs());
             now = xTaskGetTickCount();
             peakRssi       = std::max(peakRssi, cc1101Device.ReadRssiDbm());
