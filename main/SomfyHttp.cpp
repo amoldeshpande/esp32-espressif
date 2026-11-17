@@ -14,12 +14,13 @@
 #include "SomfyHttp.h"
 
 #include <CC1101Lib/LocalTypes.h>
+#include <algorithm>
 #include <cJSON.h>
-#include <esp_app_desc.h>
 #include <charconv>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <esp_app_desc.h>
 #include <esp_log.h>
 
 static const char *TAG = "SomfyHttp";
@@ -43,13 +44,13 @@ static esp_err_t  servePage(httpd_req_t *request)
 
 static esp_err_t sendFirmwareInfo(httpd_req_t *request)
 {
-    bool bRet = true;
-    const esp_app_desc_t *app = esp_app_get_description();
+    bool                  bRet = true;
+    const esp_app_desc_t *app  = esp_app_get_description();
     // Each SHA-256 byte takes two hexadecimal characters.
-    char build[sizeof(app->app_elf_sha256) * 2 + 1]{};
-    cJSON *info = cJSON_CreateObject();
-    char *json = nullptr;
-    esp_err_t result;
+    char                  build[sizeof(app->app_elf_sha256) * 2 + 1]{};
+    cJSON                *info = cJSON_CreateObject();
+    char                 *json = nullptr;
+    esp_err_t             result;
 
     CBR(info != nullptr);
     for (size_t i = 0; i < sizeof(app->app_elf_sha256); ++i)
@@ -134,11 +135,13 @@ void SomfyHttp::publish(uint64_t nowMs)
     if (m_snapshots)
     {
         m_snapshot.blinds = m_controller.GetBlinds();
+        m_snapshot.blindGroups = m_controller.GetBlindGroups();
         for (uint32_t id = 1; id <= m_snapshot.blinds.size(); ++id)
         {
             m_snapshot.positions[id - 1] = m_controller.Position(id);
             m_snapshot.targets[id - 1]   = m_controller.TargetPosition(id);
         }
+        m_snapshot.backup    = m_controller.ExportBackup();
         m_snapshot.discovery = m_controller.GetDiscovery(nowMs);
         xQueueOverwrite(m_snapshots, &m_snapshot);
     }
@@ -146,19 +149,22 @@ void SomfyHttp::publish(uint64_t nowMs)
 
 void SomfyHttp::Poll(uint64_t nowMs)
 {
-    Request    request;
-    Completion completion{SomfyController::Result::NotSent, nullptr, 0};
+    const Request &request = m_radioRequest;
+    Completion     completion{SomfyController::Result::NotSent, nullptr, 0, 0};
 
     if (m_server)
     {
         m_network.Poll(nowMs);
     }
-    if (m_requests && xQueueReceive(m_requests, &request, 0) == pdTRUE)
+    if (m_requests && xQueueReceive(m_requests, &m_radioRequest, 0) == pdTRUE)
     {
         if (m_network.GetStatus().mode == SomfyNetwork::Mode::Online)
         {
             switch (request.operation)
             {
+                case Operation::RestoreBackup:
+                    completion.setupResult = m_controller.RestoreBackup(request.backup);
+                    break;
                 case Operation::Discovery:
                     m_controller.StartDiscovery(nowMs);
                     completion.setupResult = "discovery_started";
@@ -187,6 +193,16 @@ void SomfyHttp::Poll(uint64_t nowMs)
                                                  ? "remote_saved"
                                                  : "remote_save_failed";
                     break;
+                case Operation::SetIndividualRemote:
+                    completion.setupResult = m_controller.SetIndividualRemote(request.blindId, request.remoteAddress)
+                                                 ? "individual_remote_saved"
+                                                 : "individual_remote_save_failed";
+                    break;
+                case Operation::LinkPhysicalRemote:
+                case Operation::UnlinkPhysicalRemote:
+                    completion.setupResult = m_controller.UpdatePhysicalRemote(
+                        request.blindId, request.remoteAddress, request.operation == Operation::LinkPhysicalRemote);
+                    break;
                 case Operation::SetPosition:
                     completion.setupResult = m_controller.SetPosition(request.blindId, request.percent);
                     break;
@@ -194,6 +210,19 @@ void SomfyHttp::Poll(uint64_t nowMs)
                     completion.setupResult = m_controller.SetTravelTimes(request.blindId, request.openMs, request.closeMs)
                                                  ? "travel_times_saved"
                                                  : "travel_times_save_failed";
+                    break;
+                case Operation::SetFavoritePosition:
+                    completion.setupResult = m_controller.SetFavoritePosition(request.blindId, request.percent)
+                                                 ? "favorite_saved"
+                                                 : "favorite_save_failed";
+                    break;
+                case Operation::ProgramFavorite:
+                    completion.setupResult = m_controller.ProgramFavorite(request.blindId);
+                    break;
+                case Operation::ConfirmFavorite:
+                case Operation::DiscardFavorite:
+                    completion.setupResult = m_controller.FinishFavoriteProgramming(
+                        request.blindId, request.operation == Operation::ConfirmFavorite);
                     break;
                 case Operation::RenameGroup:
                     completion.setupResult = m_controller.RenameGroup(request.remoteAddress, request.name)
@@ -205,9 +234,26 @@ void SomfyHttp::Poll(uint64_t nowMs)
                                                  ? "group_deleted"
                                                  : "group_delete_failed";
                     break;
+                case Operation::LinkGroupChannel:
+                case Operation::UnlinkGroupChannel:
+                    completion.setupResult = m_controller.UpdateGroupChannel(
+                        request.remoteAddress, request.groupChannel, request.operation == Operation::LinkGroupChannel);
+                    break;
+                case Operation::SaveBlindGroup:
+                    completion.groupId = m_controller.SaveBlindGroup(request.blindGroupId, request.name, request.members);
+                    completion.setupResult = completion.groupId ? "blind_group_saved" : "blind_group_save_failed";
+                    break;
+                case Operation::DeleteBlindGroup:
+                    completion.setupResult = m_controller.DeleteBlindGroup(request.blindGroupId)
+                                                 ? "blind_group_deleted"
+                                                 : "blind_group_delete_failed";
+                    break;
                 case Operation::GroupCommand:
+                case Operation::BlindGroupCommand:
                     {
-                        const auto group = m_controller.SendGroup(request.remoteAddress, request.command);
+                        const auto group = request.operation == Operation::GroupCommand
+                                               ? m_controller.SendGroup(request.remoteAddress, request.command)
+                                               : m_controller.SendBlindGroup(request.blindGroupId, request.command);
                         if (group.transmitted == 0)
                         {
                             completion.setupResult = "group_not_transmitted";
@@ -423,7 +469,8 @@ Error:
     return sendJson(request, status, response);
 }
 
-static esp_err_t sendRequestResult(httpd_req_t *request, uint32_t id, const char *result, uint32_t blindId)
+static esp_err_t sendRequestResult(httpd_req_t *request, uint32_t id, const char *result,
+                                   uint32_t blindId, uint32_t groupId)
 {
     char body[96]; // Request ID and result name as JSON.
 
@@ -431,6 +478,11 @@ static esp_err_t sendRequestResult(httpd_req_t *request, uint32_t id, const char
     {
         snprintf(body, sizeof(body), R"({"requestId":%)" PRIu32 R"(,"result":"%s","blindId":%)" PRIu32 "}",
                  id, result, blindId);
+    }
+    else if (groupId)
+    {
+        snprintf(body, sizeof(body), R"({"requestId":%)" PRIu32 R"(,"result":"%s","groupId":%)" PRIu32 "}",
+                 id, result, groupId);
     }
     else
     {
@@ -469,7 +521,7 @@ esp_err_t SomfyHttp::getRequest(httpd_req_t *request, const char *suffix, const 
     }
     else if (id > snapshot.lastCompletedId)
     {
-        result = sendRequestResult(request, id, "pending", 0);
+        result = sendRequestResult(request, id, "pending", 0, 0);
     }
     else if (snapshot.lastCompletedId - id >= snapshot.completions.size())
     {
@@ -499,7 +551,7 @@ esp_err_t SomfyHttp::getRequest(httpd_req_t *request, const char *suffix, const 
                     break;
             }
         }
-        result = sendRequestResult(request, id, outcome, completion->blindId);
+        result = sendRequestResult(request, id, outcome, completion->blindId, completion->groupId);
     }
     return result;
 }
@@ -509,6 +561,8 @@ static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds 
     bool                           bRet = true;
     cJSON                         *list = cJSON_CreateArray();
     cJSON                         *item;
+    cJSON                         *individual;
+    cJSON                         *groupChannels;
     char                          *json = nullptr;
     char                           address[sizeof("FFFFFF")];
     const char                    *pairing;
@@ -546,9 +600,44 @@ static esp_err_t sendBlinds(httpd_req_t *request, const SomfyController::Blinds 
         CBR(cJSON_AddStringToObject(item, "pairing", pairing));
         snprintf(address, sizeof(address), "%06" PRIX32, blind->remoteAddress);
         CBR(cJSON_AddStringToObject(item, "remoteAddress", blind->remoteAddress ? address : ""));
+        snprintf(address, sizeof(address), "%06" PRIX32, blind->individualAddresses.front());
+        CBR(cJSON_AddStringToObject(item, "individualAddress", blind->individualAddresses.front() ? address : ""));
+        individual = cJSON_AddArrayToObject(item, "individualAddresses");
+        CBR(individual);
+        for (uint32_t channel : blind->individualAddresses)
+        {
+            if (channel)
+            {
+                snprintf(address, sizeof(address), "%06" PRIX32, channel);
+                CBR(cJSON_AddItemToArray(individual, cJSON_CreateString(address)));
+            }
+        }
         CBR(cJSON_AddStringToObject(item, "groupName", blind->groupName));
+        groupChannels = cJSON_AddArrayToObject(item, "groupChannels");
+        CBR(groupChannels);
+        if (blind->remoteAddress)
+        {
+            snprintf(address, sizeof(address), "%06" PRIX32, blind->remoteAddress);
+            CBR(cJSON_AddItemToArray(groupChannels, cJSON_CreateString(address)));
+        }
+        for (uint32_t channel : blind->additionalGroupAddresses)
+        {
+            if (channel)
+            {
+                snprintf(address, sizeof(address), "%06" PRIX32, channel);
+                CBR(cJSON_AddItemToArray(groupChannels, cJSON_CreateString(address)));
+            }
+        }
         CBR(cJSON_AddNumberToObject(item, "openMs", blind->openMs));
         CBR(cJSON_AddNumberToObject(item, "closeMs", blind->closeMs));
+        if (blind->favoritePosition < 0)
+        {
+            CBR(cJSON_AddNullToObject(item, "favoritePosition"));
+        }
+        else
+        {
+            CBR(cJSON_AddNumberToObject(item, "favoritePosition", blind->favoritePosition));
+        }
         if (positions[id - 1] < 0)
         {
             CBR(cJSON_AddNullToObject(item, "position"));
@@ -584,6 +673,52 @@ Error:
     return result;
 }
 
+static esp_err_t sendBlindGroups(httpd_req_t *request, const SomfyController::BlindGroups &groups,
+                                 const SomfyController::Blinds &blinds)
+{
+    bool      bRet = true;
+    cJSON    *list = cJSON_CreateArray();
+    cJSON    *item;
+    cJSON    *members;
+    const SomfyController::BlindGroups::value_type *group;
+    uint32_t  address;
+    char     *json = nullptr;
+    esp_err_t result;
+
+    CBR(list);
+    for (uint32_t id = 1; id <= groups.size(); ++id)
+    {
+        group = &groups[id - 1];
+        if (!group->name[0])
+        {
+            continue;
+        }
+        item = cJSON_CreateObject();
+        CBR(cJSON_AddItemToArray(list, item));
+        CBR(cJSON_AddNumberToObject(item, "id", id));
+        CBR(cJSON_AddStringToObject(item, "name", group->name));
+        members = cJSON_AddArrayToObject(item, "blindIds");
+        CBR(members);
+        for (uint32_t blindId = 1; blindId <= blinds.size(); ++blindId)
+        {
+            address = blinds[blindId - 1].address;
+            if (address && std::find(group->members.begin(), group->members.end(), address) != group->members.end())
+            {
+                CBR(cJSON_AddItemToArray(members, cJSON_CreateNumber(blindId)));
+            }
+        }
+    }
+    json = cJSON_PrintUnformatted(list);
+    CBR(json);
+
+Error:
+    result = bRet ? sendJson(request, "200 OK", json)
+                  : sendJson(request, "500 Internal Server Error", R"({"error":"blind_groups_unavailable"})");
+    cJSON_free(json);
+    cJSON_Delete(list);
+    return result;
+}
+
 esp_err_t SomfyHttp::get(httpd_req_t *request)
 {
     esp_err_t                      result = ESP_OK;
@@ -592,9 +727,21 @@ esp_err_t SomfyHttp::get(httpd_req_t *request)
     const SomfyController::Remote *remote;
 
     xQueuePeek(m_snapshots, &m_httpSnapshot, 0);
-    if (strcmp(request->uri, "/api/blinds") == 0)
+    if (strcmp(request->uri, "/api/backup") == 0)
+    {
+        httpd_resp_set_type(request, "application/octet-stream");
+        httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+        httpd_resp_set_hdr(request, "Content-Disposition", "attachment; filename=somfy-backup.esb");
+        result = httpd_resp_send(request, reinterpret_cast<const char *>(&m_httpSnapshot.backup),
+                                 sizeof(m_httpSnapshot.backup));
+    }
+    else if (strcmp(request->uri, "/api/blinds") == 0)
     {
         result = sendBlinds(request, m_httpSnapshot.blinds, m_httpSnapshot.positions.data(), m_httpSnapshot.targets.data());
+    }
+    else if (strcmp(request->uri, "/api/blind-groups") == 0)
+    {
+        result = sendBlindGroups(request, m_httpSnapshot.blindGroups, m_httpSnapshot.blinds);
     }
     else if (strncmp(request->uri, requestPrefix, sizeof(requestPrefix) - 1) == 0)
     {
@@ -688,6 +835,34 @@ Error:
     return bRet;
 }
 
+static bool readBlindGroup(const cJSON *json, char *name, size_t nameSize, SomfyController::BlindIds &members)
+{
+    bool         bRet = true;
+    const cJSON *field = cJSON_GetObjectItemCaseSensitive(json, "name");
+    const cJSON *entry;
+    size_t       count = 0;
+    uint32_t     id;
+
+    CBR(cJSON_IsString(field));
+    CBR(field->valuestring[0] && strlen(field->valuestring) < nameSize);
+    memcpy(name, field->valuestring, strlen(field->valuestring));
+    field = cJSON_GetObjectItemCaseSensitive(json, "blindIds");
+    CBR(cJSON_IsArray(field));
+    cJSON_ArrayForEach(entry, field)
+    {
+        CBR(count < members.size() && cJSON_IsNumber(entry));
+        CBR(entry->valuedouble >= 1 && entry->valuedouble <= members.size());
+        id = static_cast<uint32_t>(entry->valuedouble);
+        CBR(id == entry->valuedouble);
+        CBR(std::find(members.begin(), members.begin() + count, id) == members.begin() + count);
+        members[count++] = id;
+    }
+    CBR(count != 0);
+
+Error:
+    return bRet;
+}
+
 esp_err_t SomfyHttp::post(httpd_req_t *request)
 {
     bool                   bRet = true;
@@ -701,7 +876,29 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
     const char            *end;
     std::from_chars_result parsed{};
 
-    if (strcmp(request->uri, "/api/discovery") == 0)
+    size_t                 received = 0;
+    int                    length;
+    char                  *backupBytes;
+
+    if (strcmp(request->uri, "/api/backup") == 0)
+    {
+        pending.operation = Operation::RestoreBackup;
+        response          = R"({"error":"invalid_backup_size_or_body"})";
+        CBR(request->content_len == sizeof(pending.backup) ||
+            request->content_len == SomfyController::Backup::LegacySize() ||
+            request->content_len == SomfyController::Backup::IndividualSize() ||
+            request->content_len == SomfyController::Backup::PhysicalSize() ||
+            request->content_len == SomfyController::Backup::GroupChannelSize());
+        backupBytes = reinterpret_cast<char *>(&pending.backup);
+        while (received < request->content_len)
+        {
+            length = httpd_req_recv(request, backupBytes + received, request->content_len - received);
+            CBR(length > 0);
+            received += static_cast<size_t>(length);
+        }
+        CBR(pending.backup.MatchesSize(received));
+    }
+    else if (strcmp(request->uri, "/api/discovery") == 0)
     {
         pending.operation = Operation::Discovery;
         CBR(request->content_len == 0);
@@ -715,6 +912,36 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
         CBR(cJSON_IsString(field));
         CBR(field->valuestring[0] && strlen(field->valuestring) < sizeof(pending.name));
         memcpy(pending.name, field->valuestring, strlen(field->valuestring));
+    }
+    else if (strcmp(request->uri, "/api/blind-groups") == 0 ||
+             parseActionPath(request->uri, "/api/blind-groups/", 10, pending.blindGroupId, action))
+    {
+        status = "400 Bad Request";
+        if (pending.blindGroupId == 0 || strcmp(action, "save") == 0)
+        {
+            pending.operation = Operation::SaveBlindGroup;
+            response          = R"({"error":"invalid_blind_group"})";
+            json              = readJson(request, body, sizeof(body));
+            CBR(readBlindGroup(json, pending.name, sizeof(pending.name), pending.members));
+        }
+        else if (strcmp(action, "delete") == 0)
+        {
+            pending.operation = Operation::DeleteBlindGroup;
+            response          = R"({"error":"unexpected_body"})";
+            CBR(request->content_len == 0);
+        }
+        else if (strcmp(action, "commands") == 0)
+        {
+            pending.operation = Operation::BlindGroupCommand;
+            json              = readJson(request, body, sizeof(body));
+            CBR(readCommand(json, pending.command));
+        }
+        else
+        {
+            status   = "404 Not Found";
+            response = R"({"error":"unknown_path"})";
+            CBR(false);
+        }
     }
     else if (parseActionPath(request->uri, "/api/groups/", 16, pending.remoteAddress, action))
     {
@@ -734,6 +961,20 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
             CBR(cJSON_IsString(field));
             CBR(field->valuestring[0] && strlen(field->valuestring) < sizeof(pending.name));
             memcpy(pending.name, field->valuestring, strlen(field->valuestring));
+        }
+        else if (strcmp(action, "link-channel") == 0 || strcmp(action, "unlink-channel") == 0)
+        {
+            pending.operation = strcmp(action, "link-channel") == 0 ? Operation::LinkGroupChannel
+                                                                       : Operation::UnlinkGroupChannel;
+            response = R"({"error":"invalid_remote_address"})";
+            json     = readJson(request, body, sizeof(body));
+            field    = cJSON_GetObjectItemCaseSensitive(json, "address");
+            CBR(cJSON_IsString(field));
+            CBR(strlen(field->valuestring) == 6); // A 24-bit RTS address uses six hexadecimal digits.
+            end    = field->valuestring + strlen(field->valuestring);
+            parsed = std::from_chars(field->valuestring, end, pending.groupChannel, 16);
+            CBR(parsed.ec == std::errc{} && parsed.ptr == end && pending.groupChannel != 0 &&
+                pending.groupChannel < 0xFFFFFF);
         }
         else if (strcmp(action, "delete") == 0)
         {
@@ -782,14 +1023,29 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
             response          = R"({"error":"unexpected_body"})";
             CBR(request->content_len == 0);
         }
-        else if (strcmp(action, "remote") == 0)
+        else if (strcmp(action, "remote") == 0 || strcmp(action, "individual-remote") == 0 ||
+                 strcmp(action, "link-remote") == 0 || strcmp(action, "unlink-remote") == 0)
         {
-            pending.operation = Operation::SetRemote;
+            if (strcmp(action, "remote") == 0)
+            {
+                pending.operation = Operation::SetRemote;
+            }
+            else if (strcmp(action, "individual-remote") == 0)
+            {
+                pending.operation = Operation::SetIndividualRemote;
+            }
+            else
+            {
+                pending.operation = strcmp(action, "link-remote") == 0 ? Operation::LinkPhysicalRemote
+                                                                        : Operation::UnlinkPhysicalRemote;
+            }
             status            = "400 Bad Request";
             response          = R"({"error":"invalid_remote_address"})";
             json              = readJson(request, body, sizeof(body));
             field             = cJSON_GetObjectItemCaseSensitive(json, "address");
             CBR(cJSON_IsString(field));
+            CBR(field->valuestring[0] || pending.operation == Operation::SetRemote ||
+                pending.operation == Operation::SetIndividualRemote);
             if (field->valuestring[0])
             {
                 end    = field->valuestring + strlen(field->valuestring);
@@ -811,6 +1067,41 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
             CBR(field->valuedouble >= 0 && field->valuedouble <= 100);
             pending.percent = static_cast<int>(field->valuedouble);
             CBR(pending.percent == field->valuedouble);
+        }
+        else if (strcmp(action, "favorite-program") == 0 || strcmp(action, "favorite-confirm") == 0 ||
+                 strcmp(action, "favorite-discard") == 0)
+        {
+            response = R"({"error":"unexpected_body"})";
+            CBR(request->content_len == 0);
+            if (strcmp(action, "favorite-program") == 0)
+            {
+                pending.operation = Operation::ProgramFavorite;
+            }
+            else
+            {
+                pending.operation = strcmp(action, "favorite-confirm") == 0 ? Operation::ConfirmFavorite
+                                                                             : Operation::DiscardFavorite;
+            }
+        }
+        else if (strcmp(action, "favorite") == 0)
+        {
+            pending.operation = Operation::SetFavoritePosition;
+            status            = "400 Bad Request";
+            response          = R"({"error":"invalid_favorite"})";
+            json              = readJson(request, body, sizeof(body));
+            field             = cJSON_GetObjectItemCaseSensitive(json, "position");
+            if (cJSON_IsNull(field))
+            {
+                pending.percent = -1; // Clear the saved favorite.
+            }
+            else
+            {
+                CBR(cJSON_IsNumber(field));
+                // Accept whole percentages from fully closed to fully open.
+                CBR(field->valuedouble >= 0 && field->valuedouble <= 100);
+                pending.percent = static_cast<int>(field->valuedouble);
+                CBR(pending.percent == field->valuedouble);
+            }
         }
         else if (strcmp(action, "calibrate") == 0)
         {

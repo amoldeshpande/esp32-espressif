@@ -113,3 +113,14 @@ Test with two distinguishable builds. Then interrupt an upload and verify that
 the previous firmware stays active. To exercise rollback, use an OTA test image
 that fails its first-boot startup check before marking itself valid. Check the
 serial log for startup validation and verify blind control after rollback.
+
+## Test configuration backup and restore
+
+On the LAN page, use **Configuration backup > Download backup**. Rename a
+blind and send a command, then select the backup and click **Restore blinds**.
+Verify the old name comes back and the blind still responds. Reboot and check
+that the restored calibration, names, and groups persist. Position estimates
+start unknown after the restore.
+
+For a replacement bridge, join Wi-Fi first and restore a recent backup before
+pairing any new blinds. Keep the old bridge off when testing the replacement.

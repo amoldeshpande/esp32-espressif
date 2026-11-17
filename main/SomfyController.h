@@ -28,7 +28,11 @@ class SomfyController final
     using Pairing                           = SomfyTransmitter::Pairing;
     static constexpr uint32_t kFirstBlindId = 1; // Legacy serial controls and Wi-Fi setup identity.
 
-    bool HasTimedMove() const { return m_targetBlind != 0; }
+    bool                      HasTimedMove() const { return m_targetBlind != 0; }
+
+    using Backup = SomfyTransmitter::Backup;
+    Backup      ExportBackup() const;
+    const char *RestoreBackup(const Backup &backup);
 
     struct GroupResult
     {
@@ -62,9 +66,21 @@ class SomfyController final
     bool                       RemoveBlind(uint32_t id);
     bool                       RenameGroup(uint32_t address, const char *name);
     bool                       DeleteGroup(uint32_t address);
+    const char                *UpdateGroupChannel(uint32_t groupAddress, uint32_t address, bool linked);
     bool                       SetRemote(uint32_t id, uint32_t address);
+    const char                *ProgramFavorite(uint32_t id);
+    const char                *FinishFavoriteProgramming(uint32_t id, bool confirmed);
+    bool                       SetFavoritePosition(uint32_t id, int percent);
+    bool                       SetIndividualRemote(uint32_t id, uint32_t address);
+    const char                *UpdatePhysicalRemote(uint32_t id, uint32_t address, bool linked);
     bool                       SetTravelTimes(uint32_t id, uint32_t openMs, uint32_t closeMs);
+    using BlindIds = SomfyTransmitter::BlindIds;
+    using BlindGroups = SomfyTransmitter::BlindGroups;
     GroupResult                SendGroup(uint32_t address, Command command);
+    GroupResult                SendBlindGroup(uint32_t id, Command command);
+    uint32_t                   SaveBlindGroup(uint32_t id, const char *name, const BlindIds &members);
+    bool                       DeleteBlindGroup(uint32_t id);
+    const BlindGroups         &GetBlindGroups() const;
     int                        Position(uint32_t id) const; // 0 closed, 100 open, -1 unknown.
     const char                *SetPosition(uint32_t id, int percent);
     void                       PollPosition(uint64_t nowMs);
@@ -94,13 +110,22 @@ class SomfyController final
 
     struct Motion
     {
-        int      start     = -1;
-        uint64_t since     = 0;
-        Command  direction = Command::My;
+        int      start        = -1;
+        uint64_t since        = 0;
+        uint32_t duration     = 0;
+        int      target       = -1;
+        uint32_t fullTravelMs = 0;
+        bool     towardFavorite = false;
     };
 
     std::array<Motion, Blinds{}.size()> m_motion{};
+    std::array<uint8_t, Blinds{}.size()> m_pendingFavorites{}; // Percent open plus one. Zero means no pending jog.
+    std::array<Remote, Blinds{}.size()> m_lastRemote{};
+    std::array<std::array<Remote, SomfyTransmitter::IndividualAddresses{}.size()>, Blinds{}.size()> m_lastIndividual{};
+    decltype(m_lastIndividual) m_lastGroupChannels{};
+    void                                trackRemote(const Remote &remote, uint64_t nowMs);
     void                                trackCommand(uint32_t id, Command command, Result result, uint64_t nowMs);
     int                                 position(uint32_t id, uint64_t nowMs) const;
+    GroupResult                         sendGroup(uint32_t members, Command command);
     bool                                discoveryActive(uint64_t nowMs) const;
 };

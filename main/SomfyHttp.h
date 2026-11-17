@@ -14,8 +14,8 @@
 #pragma once
 
 #include "SomfyController.h"
-#include "SomfyNetwork.h"
 #include "SomfyFirmware.h"
+#include "SomfyNetwork.h"
 #include <esp_http_server.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -42,19 +42,36 @@ class SomfyHttp final
         RenameBlind,
         RemoveBlind,
         SetRemote,
+        SetIndividualRemote,
+        LinkPhysicalRemote,
+        UnlinkPhysicalRemote,
         SetTravelTimes,
+        SetFavoritePosition,
+        ProgramFavorite,
+        ConfirmFavorite,
+        DiscardFavorite,
         SetPosition,
         GroupCommand,
+        SaveBlindGroup,
+        DeleteBlindGroup,
+        BlindGroupCommand,
         RenameGroup,
-        DeleteGroup
+        DeleteGroup,
+        LinkGroupChannel,
+        UnlinkGroupChannel,
+        RestoreBackup
     };
     struct Request
     {
         uint32_t                 id;
         Operation                operation;
+        SomfyController::Backup  backup;
         SomfyController::Command command;
         uint32_t                 blindId;
         uint32_t                 remoteAddress;
+        uint32_t                 groupChannel;
+        uint32_t                 blindGroupId;
+        SomfyController::BlindIds members;
         uint32_t                 openMs;
         uint32_t                 closeMs;
         int                      percent;
@@ -66,11 +83,14 @@ class SomfyHttp final
         SomfyController::Result result;
         const char             *setupResult; // Static result text for discovery and registry requests.
         uint32_t                blindId;
+        uint32_t                groupId;
     };
 
     struct Snapshot
     {
+        SomfyController::Backup                           backup;
         SomfyController::Blinds                           blinds;
+        SomfyController::BlindGroups                      blindGroups;
         std::array<int, SomfyController::Blinds{}.size()> positions;
         std::array<int, SomfyController::Blinds{}.size()> targets;
         SomfyController::Discovery                        discovery;
@@ -92,8 +112,9 @@ class SomfyHttp final
     QueueHandle_t    m_snapshots = nullptr;
     httpd_handle_t   m_server    = nullptr;
     SomfyNetwork     m_network;
-    SomfyFirmware m_firmware;
+    SomfyFirmware    m_firmware;
     uint32_t         m_lastAcceptedId = 0; // HTTP task only.
+    Request          m_radioRequest{};    // Radio task only. Keep backup uploads off its stack.
     Snapshot         m_snapshot{};         // Radio task only.
     Snapshot         m_httpSnapshot{};     // HTTP task only. Keep the queue copy off the task stack.
 };

@@ -128,7 +128,8 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
     bool radioReady;
     bool httpReady;
     char activeProfile = kDefaultProfileKey;
-    SomfyController            controller(cc1101Device);
+    // The controller lives for the receive loop. Keep the registry and radio buffers off the main-task stack.
+    static SomfyController     controller(cc1101Device);
     static SomfyHttp           http(controller);
     SomfyReceiver::Frame       frame;
     SomfyReceiver::Result      decodeResult;

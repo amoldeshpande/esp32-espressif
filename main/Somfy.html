@@ -12,7 +12,7 @@
   input, button { font: inherit; padding: .5rem .7rem; }
   label { display: block; margin: .7rem 0; }
   label input { display: block; width: min(100%, 23rem); box-sizing: border-box; }
-  #remote-members input { display: inline; width: auto; }
+  #remote-members input, #blind-group-members input { display: inline; width: auto; }
   output { display: block; margin-top: .7rem; }
   .controls { display: flex; flex-wrap: wrap; gap: .5rem; }
 </style>
@@ -36,6 +36,20 @@
         <button id="add-button">Add blind</button>
       </form>
       <div id="blinds"></div>
+    </section>
+    <section>
+      <h2>Blind groups</h2>
+      <button id="add-blind-group" type="button">Add group</button>
+      <form id="blind-group-form" hidden>
+        <label>Group name<input id="blind-group-name" required maxlength="32"></label>
+        <div id="blind-group-members"></div>
+        <button id="save-blind-group">Save group</button>
+        <button id="cancel-blind-group" type="button">Cancel</button>
+      </form>
+      <div id="blind-groups"></div>
+    </section>
+    <section>
+      <h2>Physical remote groups</h2>
       <div id="groups"></div>
     </section>
     <section>
@@ -56,6 +70,14 @@
       <button id="reopen" type="button">Reopen Wi-Fi setup</button>
     </section>
     <section>
+      <h2>Configuration backup</h2>
+      <a href="/api/backup" download>Download backup</a>
+      <form id="restore">
+        <label>Backup file<input id="backup-file" type="file" accept=".esb" required></label>
+        <button id="restore-button">Restore blinds</button>
+      </form>
+    </section>
+    <section>
       <h2>Firmware update</h2>
       <p id="running-firmware">Running firmware: waiting for the bridge.</p>
       <p id="selected-firmware" aria-live="polite"></p>
@@ -74,12 +96,16 @@
   let refreshing = false;
   let reopening = false;
   let lastBlindList = '';
+  let lastBlindGroupList = '';
+  let editingBlindGroupId = null;
   let setupSsid = '';
   let runningFirmware;
   let selectedFirmware;
   let pendingFirmware;
   let savedBlinds = [];
   let discoveryBlindId = null;
+  let individualDiscovery = false;
+  let discoveryGroupAddress = '';
   let groupAddress = '';
   let openDiscoveredGroup = false;
   let lastRemoteList = '';
@@ -95,12 +121,17 @@
 
   function updateButtons() {
     byId('join-button').disabled = busy;
+    byId('restore-button').disabled = busy;
     byId('firmware-button').disabled = busy || !selectedFirmware || Boolean(pendingFirmware);
     byId('scan').disabled = busy;
     byId('reopen').disabled = busy;
     byId('add-button').disabled = busy;
     byId('save-group').disabled = busy;
     byId('cancel-group').disabled = busy;
+    byId('add-blind-group').disabled = busy || savedBlinds.length === 0;
+    byId('save-blind-group').disabled = busy;
+    byId('cancel-blind-group').disabled = busy;
+    byId('blind-group-members').querySelectorAll('input').forEach(input => { input.disabled = busy; });
     byId('remote-members').querySelectorAll('input').forEach(input => { input.disabled = busy; });
     byId('online').querySelectorAll('button[data-unavailable]').forEach(button => {
       button.disabled = busy || button.dataset.unavailable === 'true';
@@ -121,6 +152,7 @@
     const heading = document.createElement('h3');
     const detail = document.createElement('p');
     const controls = document.createElement('div');
+    const individualAddresses = blind.individualAddresses || [];
     heading.textContent = blind.name;
     controls.className = 'controls';
     card.append(heading, detail, controls);
@@ -129,6 +161,12 @@
       detail.textContent = 'Remote ' + blind.address + (blind.ready
         ? ' - Paired. Use the controls to test movement.'
         : ' - Paired. Control is unavailable. Check radio profile 1.');
+      detail.textContent += blind.remoteAddress
+        ? ' Group channel: ' + blind.remoteAddress + '.'
+        : ' No group channel linked.';
+      if (individualAddresses.length) {
+        detail.textContent += ' Other linked channels: ' + individualAddresses.join(', ') + '.';
+      }
       blindButton(controls, 'Open', !blind.ready, () => sendCommand(blind, 'open'));
       blindButton(controls, 'Close', !blind.ready, () => sendCommand(blind, 'close'));
       blindButton(controls, 'My / Stop', !blind.ready, () => sendCommand(blind, 'stop'));
@@ -145,8 +183,18 @@
     position.dataset.blindPosition = blind.id;
     card.append(position);
     blindButton(controls, 'Rename', false, () => renameBlind(blind));
-    blindButton(controls, 'Discover remote for this blind', false, () => startDiscovery(blind.id));
+    blindButton(controls, 'Discover group channel', false, () => startDiscovery(blind.id, false, ''));
+    if (blind.pairing === 'paired') {
+      blindButton(controls, 'Discover another remote', false, () => startDiscovery(blind.id, true, ''));
+      for (const address of individualAddresses) {
+        blindButton(controls, 'Unlink ' + address, false, () => updatePhysicalRemote(blind.id, address, false));
+      }
+    }
     blindButton(controls, 'Set travel times', false, () => setTravelTimes(blind));
+    if (blind.pairing === 'paired') {
+      blindButton(controls, 'Record existing My position', false, () => setFavorite(blind));
+      blindButton(controls, 'Save current position as motor My', !blind.ready, () => programFavorite(blind));
+    }
     blindButton(controls, 'Remove', false, () => removeBlind(blind));
     return card;
   }
@@ -165,16 +213,24 @@
       const detail = document.createElement('p');
       const controls = document.createElement('div');
       heading.textContent = members[0].groupName || 'Remote group ' + address;
-      detail.textContent = members.map(blind => blind.name).join(', ');
+      const groupChannels = members[0].groupChannels || [address];
+      detail.textContent = members.map(blind => blind.name).join(', ') + '. Channels: ' + groupChannels.join(', ') + '.';
       controls.className = 'controls';
       card.append(heading, detail, controls);
       const unavailable = members.every(blind => !blind.ready);
       blindButton(controls, 'Rename group', false, () => renameGroup(address, heading.textContent));
       blindButton(controls, 'Delete group', false, () => deleteGroup(address, heading.textContent));
       blindButton(controls, 'Edit members', false, () => editGroup(address, null));
-      blindButton(controls, 'Open group', unavailable, () => sendGroup(address, 'open'));
-      blindButton(controls, 'Close group', unavailable, () => sendGroup(address, 'close'));
-      blindButton(controls, 'My / Stop group', unavailable, () => sendGroup(address, 'stop'));
+      blindButton(controls, 'Discover group remote', false, () => startDiscovery(null, false, address));
+      for (const channel of groupChannels) {
+        if (channel !== address) {
+          blindButton(controls, 'Unlink group channel ' + channel, false,
+            () => updateGroupChannel(address, channel, false));
+        }
+      }
+      blindButton(controls, 'Open group', unavailable, () => sendGroup('/groups/' + address, 'open'));
+      blindButton(controls, 'Close group', unavailable, () => sendGroup('/groups/' + address, 'close'));
+      blindButton(controls, 'My / Stop group', unavailable, () => sendGroup('/groups/' + address, 'stop'));
       cards.push(card);
     }
     byId('groups').replaceChildren(...cards);
@@ -196,23 +252,120 @@
         ? 'Set full opening and closing times to estimate position.'
         : blind.position == null ? 'Estimated position: unknown.' : 'Estimated position: ' + blind.position + '% open.';
       if (blind.targetPosition != null) position.textContent += ' Target: ' + blind.targetPosition + '% open.';
+      if (blind.favoritePosition != null) position.textContent += ' Recorded My: ' + blind.favoritePosition + '% open.';
     }
     updateButtons();
   }
 
+  async function readBlindGroups() {
+    const groups = await api('/blind-groups', {});
+    const list = JSON.stringify([groups, savedBlinds.map(blind => [blind.id, blind.name, blind.ready])]);
+    if (list === lastBlindGroupList) return;
+    byId('blind-groups').replaceChildren(...groups.map(group => {
+      const card = document.createElement('article');
+      const heading = document.createElement('h3');
+      const detail = document.createElement('p');
+      const controls = document.createElement('div');
+      const members = savedBlinds.filter(blind => group.blindIds.includes(blind.id));
+      const path = '/blind-groups/' + group.id;
+      heading.textContent = group.name;
+      detail.textContent = members.length ? members.map(blind => blind.name).join(', ') : 'No members.';
+      controls.className = 'controls';
+      card.append(heading, detail, controls);
+      const unavailable = members.every(blind => !blind.ready);
+      blindButton(controls, 'Open group', unavailable, () => sendGroup(path, 'open'));
+      blindButton(controls, 'Close group', unavailable, () => sendGroup(path, 'close'));
+      blindButton(controls, 'My / Stop group', unavailable, () => sendGroup(path, 'stop'));
+      blindButton(controls, 'Edit group', false, () => editBlindGroup(group));
+      blindButton(controls, 'Delete group', false, () => deleteBlindGroup(group));
+      return card;
+    }));
+    lastBlindGroupList = list;
+    updateButtons();
+  }
+
+  function editBlindGroup(group) {
+    editingBlindGroupId = group?.id ?? null;
+    byId('blind-group-name').value = group?.name ?? '';
+    byId('blind-group-members').replaceChildren(...savedBlinds.map(blind => {
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.value = String(blind.id);
+      checkbox.checked = group?.blindIds.includes(blind.id) ?? false;
+      label.append(checkbox, ' ' + blind.name);
+      return label;
+    }));
+    byId('blind-group-form').hidden = false;
+    byId('blind-group-form').scrollIntoView({ block: 'nearest' });
+  }
+
+  byId('add-blind-group').addEventListener('click', () => editBlindGroup(null));
+  byId('cancel-blind-group').addEventListener('click', () => { byId('blind-group-form').hidden = true; });
+  byId('blind-group-form').addEventListener('submit', event => {
+    event.preventDefault();
+    run(async () => {
+      const name = byId('blind-group-name').value.trim();
+      if (!name || new TextEncoder().encode(name).length > 32) {
+        throw new Error('Enter a group name between 1 and 32 bytes.');
+      }
+      const blindIds = Array.from(byId('blind-group-members').querySelectorAll('input'))
+        .filter(input => input.checked).map(input => Number(input.value));
+      if (!blindIds.length) throw new Error('Select at least one blind.');
+      const path = editingBlindGroupId === null ? '/blind-groups' : '/blind-groups/' + editingBlindGroupId + '/save';
+      const { result } = await submitRequest(path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, blindIds })
+      });
+      if (result !== 'blind_group_saved') throw new Error('Could not save the blind group.');
+      byId('blind-group-form').hidden = true;
+      byId('result').textContent = 'Group saved.';
+      await readBlindGroups();
+    });
+  });
+
+  async function deleteBlindGroup(group) {
+    if (!confirm('Delete ' + group.name + '?')) return;
+    const { result } = await submitRequest('/blind-groups/' + group.id + '/delete', { method: 'POST' });
+    if (result !== 'blind_group_deleted') throw new Error('Could not delete the blind group.');
+    if (editingBlindGroupId === group.id) byId('blind-group-form').hidden = true;
+    byId('result').textContent = 'Group deleted.';
+    await readBlindGroups();
+  }
+
   async function readControls() {
     await readBlinds();
+    await readBlindGroups();
     const scan = await api('/discovery', {});
     byId('scan-status').textContent = scan.active ? 'Listening. Press a button on the physical remote.' :
       scan.remotes.length ? 'Scan complete.' : 'No remotes found.';
     if (scan.overflow) byId('scan-status').textContent += ' The remote list is full.';
     const addresses = scan.remotes.map(remote => remote.address);
-    const list = JSON.stringify(addresses);
+    const blind = individualDiscovery ? savedBlinds.find(entry => entry.id === discoveryBlindId) : null;
+    const linked = blind?.individualAddresses || [];
+    const group = discoveryGroupAddress && savedBlinds.find(entry => entry.remoteAddress === discoveryGroupAddress);
+    const groupChannels = group ? group.groupChannels || [discoveryGroupAddress] : [];
+    const list = JSON.stringify([addresses, blind?.remoteAddress, linked, groupChannels]);
     // Leave discovery buttons in place when repeated frames change only command details.
     if (list !== lastRemoteList) {
       byId('remotes').replaceChildren(...addresses.map(address => {
         const row = document.createElement('li');
-        blindButton(row, 'Assign blinds to ' + address, false, () => editGroup(address, discoveryBlindId));
+        if (discoveryGroupAddress) {
+          if (group && !groupChannels.includes(address)) {
+            blindButton(row, 'Link group channel ' + address, false,
+              () => updateGroupChannel(discoveryGroupAddress, address, true));
+          } else {
+            row.textContent = group ? address + ' is already linked.' : 'This group has no members.';
+          }
+        } else if (individualDiscovery) {
+          if (blind && blind.remoteAddress !== address && !linked.includes(address)) {
+            blindButton(row, 'Link remote ' + address, false,
+              () => updatePhysicalRemote(blind.id, address, true));
+          } else {
+            row.textContent = address + ' is already linked or the blind was removed.';
+          }
+        } else {
+          blindButton(row, 'Assign blinds to ' + address, false, () => editGroup(address, discoveryBlindId));
+        }
         return row;
       }));
       lastRemoteList = list;
@@ -281,7 +434,15 @@
       catch {
         if (byId('lan').hidden) byId('network').textContent = 'Waiting for the ESP32...';
       }
-      finally { refreshing = false; }
+      finally {
+        if (pendingFirmware && performance.now() >= pendingFirmware.deadline) {
+          byId('update-status').textContent = 'Could not verify the running build. Check it when the bridge reconnects.';
+          pendingFirmware = null;
+          runningFirmware = null;
+          updateButtons();
+        }
+        refreshing = false;
+      }
     }
   }
 
@@ -298,8 +459,8 @@
     }
   }
 
-  async function waitForResult(requestId) {
-    const deadline = performance.now() + 5000;
+  async function waitForResult(requestId, timeoutMs) {
+    const deadline = performance.now() + timeoutMs;
     while (performance.now() < deadline) {
       const result = await api('/requests/' + requestId, {});
       if (result.result !== 'pending') return result;
@@ -320,7 +481,7 @@
       // The old firmware can still answer briefly after accepting the upload.
       if (matches || performance.now() >= pendingFirmware.deadline) {
         byId('update-status').textContent = matches
-          ? 'The uploaded build is running.'
+          ? 'The selected build is running.'
           : 'The bridge is running a different build than the uploaded file.';
         pendingFirmware = null;
       }
@@ -377,17 +538,50 @@
       const image = selectedFirmware;
       byId('update-status').textContent = '';
       byId('result').textContent = 'Uploading firmware...';
-      const response = await fetch('/api/firmware', {
-        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
-        body: file, signal: AbortSignal.timeout(135000)
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'HTTP ' + response.status);
+      let response;
+      try {
+        response = await fetch('/api/firmware', {
+          method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
+          body: file, signal: AbortSignal.timeout(135000)
+        });
+      } catch {
+        // The bridge can reboot before the browser receives the upload response.
+      }
+      if (response && !response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'HTTP ' + response.status);
+      }
       byId('firmware-file').value = '';
       selectedFirmware = null;
+      // Allow 30 seconds for the bridge to reboot and rejoin Wi-Fi.
       pendingFirmware = { build: image.build, deadline: performance.now() + 30000 };
       byId('result').textContent = '';
-      byId('update-status').textContent = 'Update accepted. Reconnecting to check the running build...';
+      byId('update-status').textContent = response
+        ? 'Update accepted. Reconnecting to check the running build...'
+        : 'Upload response unavailable. Reconnecting to check the running build...';
+    });
+  });
+
+  byId('restore').addEventListener('submit', event => {
+    event.preventDefault();
+    run(async () => {
+      const input = byId('backup-file');
+      const file = input.files[0];
+      if (!file || !confirm('Restore saved blinds and groups from this backup?')) return;
+      const { result } = await submitRequest('/backup', {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file
+      });
+      const messages = {
+        invalid_backup: 'The file is invalid or the blind registry is unavailable.',
+        backup_identity_conflict: 'Backup conflicts with a saved virtual remote. Restore it on a fresh bridge.',
+        position_busy: 'Wait for the timed move to finish before restoring.',
+        restore_write_failed: 'Restore could not finish. Restart the bridge to let it recover.'
+      };
+      if (result !== 'backup_restored') throw new Error(messages[result] || result);
+      input.value = '';
+      byId('result').textContent = 'Blinds and groups restored. Run a full Open or Close to reestablish positions.';
+      await readBlinds();
+      await readBlindGroups();
     });
   });
 
@@ -411,22 +605,47 @@
     byId('network').textContent = 'Join the open ' + setupSsid + ' network and visit http://192.168.4.1/.';
   }));
 
-  async function startDiscovery(blindId) {
+  async function startDiscovery(blindId, individual, groupAddress) {
     byId('remote-group').hidden = true;
     byId('remotes').scrollIntoView({ block: 'nearest' });
     const { requestId } = await api('/discovery', { method: 'POST' });
-    const { result } = await waitForResult(requestId);
+    const { result } = await waitForResult(requestId, 5000);
     if (result !== 'discovery_started') throw new Error('The scan did not start.');
     discoveryBlindId = blindId;
-    openDiscoveredGroup = true;
+    individualDiscovery = individual;
+    discoveryGroupAddress = groupAddress;
+    lastRemoteList = '';
+    openDiscoveredGroup = !individual && !groupAddress;
     await readControls();
   }
 
-  byId('scan').addEventListener('click', () => run(() => startDiscovery(null)));
+  byId('scan').addEventListener('click', () => run(() => startDiscovery(null, false, '')));
+
+  async function updateGroupChannel(group, address, linked) {
+    const action = linked ? 'link-channel' : 'unlink-channel';
+    const { result } = await submitRequest('/groups/' + group + '/' + action, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address })
+    });
+    if (result === 'group_channel_limit') throw new Error('This group already has four additional channels linked.');
+    if (result !== 'group_channels_saved') throw new Error('Could not save group channel: ' + result);
+    byId('result').textContent = linked ? 'Group channel linked.' : 'Group channel unlinked.';
+    await readControls();
+  }
+
+  async function updatePhysicalRemote(id, address, linked) {
+    const action = linked ? 'link-remote' : 'unlink-remote';
+    const { result } = await submitRequest('/blinds/' + id + '/' + action, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address })
+    });
+    if (result === 'physical_remote_limit') throw new Error('This blind already has four additional channels linked.');
+    if (result !== 'physical_remotes_saved') throw new Error('Could not save remote link: ' + result);
+    byId('result').textContent = linked ? 'Remote linked.' : 'Remote unlinked.';
+    await readControls();
+  }
 
   async function submitRequest(path, options) {
     const { requestId } = await api(path, options);
-    return waitForResult(requestId);
+    return waitForResult(requestId, 5000);
   }
 
   async function pairBlind(blind) {
@@ -557,6 +776,46 @@
     });
   });
 
+  async function programFavorite(blind) {
+    if (!confirm('Is ' + blind.name + ' stopped at the new favorite, away from its existing My position? ' +
+      'Programming at the existing My position can erase it.')) return;
+    const path = '/blinds/' + blind.id + '/favorite-';
+    byId('result').textContent = 'Sending the motor My programming command...';
+    const { requestId } = await api(path + 'program', { method: 'POST' });
+    // The long My burst takes about five seconds on the radio.
+    const { result } = await waitForResult(requestId, 15000);
+    if (result !== 'favorite_jog_pending') {
+      const messages = {
+        favorite_program_busy: 'Wait for the blind and any timed move to stop.',
+        favorite_program_unavailable: 'The blind needs to be ready with a known position.',
+        favorite_already_recorded: 'Move away from the recorded My position before programming.',
+        favorite_program_not_sent: 'The programming command could not be sent.'
+      };
+      throw new Error(messages[result] || result);
+    }
+    const jogged = confirm('Did ' + blind.name + ' jog after the programming command?');
+    const { result: finished } = await submitRequest(path + (jogged ? 'confirm' : 'discard'), { method: 'POST' });
+    if (finished === 'favorite_saved') {
+      byId('result').textContent = 'My position saved. Move away and press My to verify that the blind returns.';
+    } else if (finished === 'favorite_program_discarded') {
+      byId('result').textContent = 'Motor programming unconfirmed. The bridge kept its previous My setting.';
+    } else {
+      throw new Error('Could not finish My programming: ' + finished);
+    }
+    await readBlinds();
+  }
+
+  async function setFavorite(blind) {
+    const entry = prompt('Where does the motor stop when you press My while idle? Enter percent open, or leave blank to clear this record.',
+      blind.favoritePosition ?? '');
+    if (entry === null) return;
+    const position = entry.trim() === '' ? null : Number(entry);
+    if (position !== null && (!Number.isInteger(position) || position < 0 || position > 100)) {
+      throw new Error('Enter a whole percentage from 0 to 100.');
+    }
+    await changeBlind(blind, 'favorite', { position }, 'favorite_saved');
+  }
+
   async function setTravelTimes(blind) {
     const opening = prompt('Full opening time in seconds', blind.openMs ? blind.openMs / 1000 : '');
     if (opening === null) return;
@@ -596,8 +855,8 @@
     byId('result').textContent = 'Group deleted.';
   }
 
-  async function sendGroup(address, command) {
-    const { result } = await submitRequest('/groups/' + address + '/commands', {
+  async function sendGroup(path, command) {
+    const { result } = await submitRequest(path + '/commands', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command })
     });
