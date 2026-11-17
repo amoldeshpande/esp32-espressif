@@ -28,6 +28,8 @@ class SomfyController final
     using Pairing                           = SomfyTransmitter::Pairing;
     static constexpr uint32_t kFirstBlindId = 1; // Legacy serial controls and Wi-Fi setup identity.
 
+    bool HasTimedMove() const { return m_targetBlind != 0; }
+
     struct GroupResult
     {
         unsigned members;

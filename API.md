@@ -96,3 +96,21 @@ During setup, join the open `Somfy-Setup-XXXXXX` network and use `http://192.168
 The two Wi-Fi POSTs return HTTP 202 with `{"accepted":true}`. Poll `GET /api/network` for progress instead of looking up a request ID. A state conflict returns HTTP 409.
 
 The network response has fields `mode`, `error`, `setupSsid`, and `address`. Modes are `setup`, `joining`, `joined`, `online`, `reopening`, and `unavailable`. The error is empty or one of `join_failed`, `save_failed`, and `setup_failed`. At `joined`, use `address` to find the device on the LAN. The setup network closes shortly afterward.
+
+
+## Update firmware
+
+On the LAN, send `POST /api/firmware` with the raw `esp32-espressif.bin`
+application bytes, `Content-Type: application/octet-stream`, and a
+`Content-Length`. The one-time USB migration must have installed the OTA
+partition table. Use an image from this project that fits the inactive slot.
+
+A successful upload returns HTTP 202 with `{"result":"rebooting"}`. This
+endpoint does not create a request ID. The bridge pauses radio operations while
+writing and waits for any timed blind move to finish before granting access.
+A rejected or interrupted upload leaves the current boot slot selected.
+
+On the LAN, `GET /api/firmware` returns `version`, `project`, and `build`.
+The build is the full ELF SHA-256 embedded in the running image. The web page
+shows its first 12 digits. Set the release version in `version.txt` before
+building a new release.

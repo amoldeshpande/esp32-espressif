@@ -55,6 +55,16 @@
       <h2>Wi-Fi</h2>
       <button id="reopen" type="button">Reopen Wi-Fi setup</button>
     </section>
+    <section>
+      <h2>Firmware update</h2>
+      <p id="running-firmware">Running firmware: waiting for the bridge.</p>
+      <p id="selected-firmware" aria-live="polite"></p>
+      <p id="update-status" role="status"></p>
+      <form id="firmware">
+        <label>Application binary<input id="firmware-file" type="file" accept=".bin" required></label>
+        <button id="firmware-button">Upload and restart</button>
+      </form>
+    </section>
   </div>
   <output id="result" aria-live="polite"></output>
 </main>
@@ -65,6 +75,9 @@
   let reopening = false;
   let lastBlindList = '';
   let setupSsid = '';
+  let runningFirmware;
+  let selectedFirmware;
+  let pendingFirmware;
   let savedBlinds = [];
   let discoveryBlindId = null;
   let groupAddress = '';
@@ -82,6 +95,7 @@
 
   function updateButtons() {
     byId('join-button').disabled = busy;
+    byId('firmware-button').disabled = busy || !selectedFirmware || Boolean(pendingFirmware);
     byId('scan').disabled = busy;
     byId('reopen').disabled = busy;
     byId('add-button').disabled = busy;
@@ -253,7 +267,10 @@
       link.href = 'http://' + state.address + '/';
       link.textContent = link.href;
     }
-    if (state.mode === 'online') await readControls();
+    if (state.mode === 'online') {
+      if (!runningFirmware || pendingFirmware) await readFirmware();
+      await readControls();
+    }
     updateButtons();
   }
 
@@ -290,6 +307,89 @@
     }
     throw new Error('Result unavailable. Check the blind before retrying.');
   }
+
+  function firmwareLabel(image) {
+    return image.version + ' (build ' + image.build.slice(0, 12) + ')';
+  }
+
+  async function readFirmware() {
+    runningFirmware = await api('/firmware', {});
+    byId('running-firmware').textContent = 'Running firmware: ' + firmwareLabel(runningFirmware);
+    if (pendingFirmware) {
+      const matches = pendingFirmware.build === runningFirmware.build;
+      // The old firmware can still answer briefly after accepting the upload.
+      if (matches || performance.now() >= pendingFirmware.deadline) {
+        byId('update-status').textContent = matches
+          ? 'The uploaded build is running.'
+          : 'The bridge is running a different build than the uploaded file.';
+        pendingFirmware = null;
+      }
+    }
+  }
+
+  async function firmwareInfo(file) {
+    // ESP32 image header (24 bytes), first segment header (8), then the 256-byte app descriptor.
+    const descriptorOffset = 24 + 8;
+    const bytes = new Uint8Array(await file.slice(0, descriptorOffset + 256).arrayBuffer());
+    if (bytes.length !== descriptorOffset + 256 || bytes[0] !== 0xe9 ||
+        new DataView(bytes.buffer).getUint32(descriptorOffset, true) !== 0xabcd5432) {
+      throw new Error('Select an ESP32 application binary.');
+    }
+
+    function readText(offset) {
+      const field = bytes.subarray(descriptorOffset + offset, descriptorOffset + offset + 32);
+      const end = field.indexOf(0);
+      return new TextDecoder().decode(end < 0 ? field : field.subarray(0, end));
+    }
+
+    // ESP-IDF app descriptor offsets for version, project name, and the ELF SHA-256.
+    const build = Array.from(bytes.subarray(descriptorOffset + 144, descriptorOffset + 176),
+      byte => byte.toString(16).padStart(2, '0')).join('');
+    return { version: readText(16), project: readText(48), build };
+  }
+
+  byId('firmware-file').addEventListener('change', async () => {
+    const input = byId('firmware-file');
+    const file = input.files[0];
+    selectedFirmware = null;
+    byId('selected-firmware').textContent = '';
+    updateButtons();
+    if (!file) return;
+    try {
+      const image = await firmwareInfo(file);
+      if (input.files[0] !== file) return;
+      if (!runningFirmware) await readFirmware();
+      if (input.files[0] !== file) return;
+      if (image.project !== runningFirmware.project) throw new Error('This file is from a different project.');
+      selectedFirmware = image;
+      byId('selected-firmware').textContent = 'Selected firmware: ' + firmwareLabel(image);
+    } catch (error) {
+      if (input.files[0] === file) byId('selected-firmware').textContent = error.message;
+    }
+    updateButtons();
+  });
+
+  byId('firmware').addEventListener('submit', event => {
+    event.preventDefault();
+    run(async () => {
+      const file = byId('firmware-file').files[0];
+      if (!file || !selectedFirmware || pendingFirmware) return;
+      const image = selectedFirmware;
+      byId('update-status').textContent = '';
+      byId('result').textContent = 'Uploading firmware...';
+      const response = await fetch('/api/firmware', {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' },
+        body: file, signal: AbortSignal.timeout(135000)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'HTTP ' + response.status);
+      byId('firmware-file').value = '';
+      selectedFirmware = null;
+      pendingFirmware = { build: image.build, deadline: performance.now() + 30000 };
+      byId('result').textContent = '';
+      byId('update-status').textContent = 'Update accepted. Reconnecting to check the running build...';
+    });
+  });
 
   byId('join').addEventListener('submit', event => {
     event.preventDefault();

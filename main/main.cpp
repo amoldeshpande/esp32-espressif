@@ -62,6 +62,7 @@ static void     receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edg
 
 extern "C" void app_main(void)
 {
+    SomfyFirmware             firmware;
     static CC1101Device        cc1101Device;
     // 256 entries accommodate two edges per bit of an 80-bit frame, plus the preamble.
     const QueueHandle_t        edgeQueue = xQueueCreate(256, sizeof(uint32_t));
@@ -115,11 +116,17 @@ Error:
         ESP_LOGE(TAG, "Radio initialization failed. Check CC1101 power and SPI wiring.");
         vQueueDelete(edgeQueue);
     }
+    if (!bRet)
+    {
+        firmware.CheckBoot(false);
+    }
 }
 
 static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin, gpio_num_t txPin)
 {
     bool consoleReady;
+    bool radioReady;
+    bool httpReady;
     char activeProfile = kDefaultProfileKey;
     SomfyController            controller(cc1101Device);
     static SomfyHttp           http(controller);
@@ -137,12 +144,15 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
     int                        peakRssi = kMinRssiDbm;
     char                       key;
 
-    if (!controller.Init(txPin))
+    radioReady = controller.Init(txPin);
+    if (!radioReady)
     {
         ESP_LOGE(TAG, "Transmit setup failed; continuing with reception only");
     }
     logTransmitStatus(controller);
-    if (!http.Start(monotonicMs()))
+    httpReady = http.Start(monotonicMs());
+    http.CheckFirmware(radioReady && httpReady);
+    if (!httpReady)
     {
         ESP_LOGE(TAG, "Continuing with serial control");
     }
@@ -161,6 +171,11 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
     lastRssiSample = lastReport;
     while (true)
     {
+        if (http.PauseRadioForUpdate())
+        {
+            vTaskDelay(1);
+            continue;
+        }
         if (xQueueReceive(edgeQueue, &timestamp, pdMS_TO_TICKS(kRssiSampleIntervalMs)) == pdTRUE)
         {
             ++edgeCount;

@@ -36,3 +36,17 @@ powershell.exe -NoProfile -File .\scripts\Somfy-Bench.ps1 -Action Monitor -Port 
 If esptool reports the wrong boot mode, hold **BOOT**, tap **EN**, then release **BOOT** once esptool identifies the chip. Exit the serial monitor with **Ctrl+]** before flashing again.
 
 For wiring and hardware checks, see [Test on Windows](TEST-WINDOWS.md).
+
+## First flash for Wi-Fi firmware updates
+
+The OTA layout requires a board with at least 4 MB of flash. Back up the board
+with the Backup action, then use the full Flash action over USB. This writes
+the bootloader, partition table, initial OTA data, and application. Keep using
+the same build selection for Flash and Monitor. If an existing build uses a
+different partition table, regenerate its sdkconfig with the current project
+defaults before flashing.
+
+The OTA layout keeps the original NVS offset and size. A normal flash preserves
+saved Wi-Fi settings, blinds, and rolling codes. Avoid a full flash erase during
+migration. After the first USB flash, follow the firmware update steps in
+[TEST-WINDOWS.md](TEST-WINDOWS.md).

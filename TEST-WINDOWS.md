@@ -36,7 +36,7 @@ The ESP32 saves the Wi-Fi credentials after receiving a LAN IP address. It reope
 
 The LAN page and HTTP API use no login or token. Use profile **1** for control of the existing paired blind.
 
-The HTTP build uses the ESP-IDF 1500 KiB factory app partition to fit Wi-Fi. Flash the full build with Somfy-Bench so the partition table is included. The NVS partition keeps its existing offset and size, preserving the virtual remote and rolling code.
+The firmware uses two 1700 KiB application slots for OTA updates. Flash the full build with Somfy-Bench so the partition table is included. The NVS partition keeps its existing offset and size, preserving the virtual remote and rolling code.
 
 ```powershell
 $base = 'http://192.168.1.50' # Replace with the LAN address shown after setup.
@@ -100,3 +100,16 @@ remote opens the group editor. If several addresses appear, choose the one
 you want. Select the saved blinds you saw move and click **Save group**.
 Existing members and the blind that started the scan are preselected.
 Use **Edit members** to change the group later. Existing pairings are reused.
+
+## Test a firmware update
+
+After the first USB flash with the OTA layout, open the bridge on your LAN.
+Under **Firmware update**, select the built application file
+`esp32-espressif.bin` and click **Upload and restart**. Use the application
+binary from another build of this project. Wait for the bridge to reconnect,
+then reload the page and verify the saved blinds still respond.
+
+Test with two distinguishable builds. Then interrupt an upload and verify that
+the previous firmware stays active. To exercise rollback, use an OTA test image
+that fails its first-boot startup check before marking itself valid. Check the
+serial log for startup validation and verify blind control after rollback.

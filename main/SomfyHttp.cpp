@@ -15,6 +15,7 @@
 
 #include <CC1101Lib/LocalTypes.h>
 #include <cJSON.h>
+#include <esp_app_desc.h>
 #include <charconv>
 #include <cinttypes>
 #include <cstdio>
@@ -38,6 +39,35 @@ static esp_err_t  servePage(httpd_req_t *request)
     httpd_resp_set_type(request, "text/html; charset=utf-8");
     httpd_resp_set_hdr(request, "Cache-Control", "no-store");
     return httpd_resp_sendstr(request, somfyPage);
+}
+
+static esp_err_t sendFirmwareInfo(httpd_req_t *request)
+{
+    bool bRet = true;
+    const esp_app_desc_t *app = esp_app_get_description();
+    // Each SHA-256 byte takes two hexadecimal characters.
+    char build[sizeof(app->app_elf_sha256) * 2 + 1]{};
+    cJSON *info = cJSON_CreateObject();
+    char *json = nullptr;
+    esp_err_t result;
+
+    CBR(info != nullptr);
+    for (size_t i = 0; i < sizeof(app->app_elf_sha256); ++i)
+    {
+        snprintf(build + i * 2, 3, "%02x", static_cast<unsigned>(app->app_elf_sha256[i]));
+    }
+    CBR(cJSON_AddStringToObject(info, "version", app->version));
+    CBR(cJSON_AddStringToObject(info, "build", build));
+    CBR(cJSON_AddStringToObject(info, "project", app->project_name));
+    json = cJSON_PrintUnformatted(info);
+    CBR(json != nullptr);
+
+Error:
+    result = bRet ? sendJson(request, "200 OK", json)
+                  : sendJson(request, "500 Internal Server Error", R"({"error":"firmware_info_unavailable"})");
+    cJSON_free(json);
+    cJSON_Delete(info);
+    return result;
 }
 
 bool SomfyHttp::Start(uint64_t nowMs)
@@ -201,6 +231,16 @@ void SomfyHttp::Poll(uint64_t nowMs)
     publish(nowMs);
 }
 
+bool SomfyHttp::PauseRadioForUpdate()
+{
+    return m_firmware.PauseRadio(m_controller.HasTimedMove());
+}
+
+void SomfyHttp::CheckFirmware(bool healthy)
+{
+    m_firmware.CheckBoot(healthy);
+}
+
 static bool sameOrigin(httpd_req_t *request)
 {
     bool bRet = true;
@@ -236,6 +276,14 @@ esp_err_t SomfyHttp::handleRequest(httpd_req_t *request)
     else if (http.m_network.GetStatus().mode != SomfyNetwork::Mode::Online)
     {
         result = sendJson(request, "503 Service Unavailable", R"({"error":"wifi_setup_in_progress"})");
+    }
+    else if (request->method == HTTP_GET && strcmp(request->uri, "/api/firmware") == 0)
+    {
+        result = sendFirmwareInfo(request);
+    }
+    else if (request->method == HTTP_POST && strcmp(request->uri, "/api/firmware") == 0)
+    {
+        result = http.m_firmware.Upload(request);
     }
     else if (request->method == HTTP_GET)
     {

@@ -15,6 +15,7 @@
 
 #include "SomfyController.h"
 #include "SomfyNetwork.h"
+#include "SomfyFirmware.h"
 #include <esp_http_server.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -28,6 +29,8 @@ class SomfyHttp final
     bool Start(uint64_t nowMs);
     // Called by the radio task to service queued work and refresh HTTP snapshots.
     void Poll(uint64_t nowMs);
+    bool PauseRadioForUpdate();
+    void CheckFirmware(bool healthy);
 
   private:
     enum class Operation : uint8_t
@@ -89,6 +92,7 @@ class SomfyHttp final
     QueueHandle_t    m_snapshots = nullptr;
     httpd_handle_t   m_server    = nullptr;
     SomfyNetwork     m_network;
+    SomfyFirmware m_firmware;
     uint32_t         m_lastAcceptedId = 0; // HTTP task only.
     Snapshot         m_snapshot{};         // Radio task only.
     Snapshot         m_httpSnapshot{};     // HTTP task only. Keep the queue copy off the task stack.
