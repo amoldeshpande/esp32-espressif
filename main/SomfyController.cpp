@@ -39,16 +39,19 @@ const char *SomfyController::RestoreBackup(const Backup &backup)
     return result;
 }
 
-bool SomfyController::Init(gpio_num_t txPin)
+bool SomfyController::Init(gpio_num_t txPin, bool radioReady)
 {
-    return m_transmitter.Init(txPin);
+    const bool initialized = m_transmitter.Init(txPin);
+
+    m_radioReady = radioReady && initialized;
+    return initialized;
 }
 
 bool SomfyController::RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps, bool transmitProfile)
 {
     bool bRet = true;
 
-    CBR(m_targetBlind == 0);
+    CBR(m_radioReady && m_targetBlind == 0);
     m_receiver        = {};
     m_transmitProfile = false;
     CBR(m_radio.RetuneReceive(frequencyMHz, bandwidthKHz, offsetSteps));
@@ -503,7 +506,7 @@ SomfyController::Result SomfyController::Send(uint32_t id, Command command)
     Result   result = Result::NotSent;
     uint64_t startedMs;
 
-    if (m_transmitProfile && (m_targetBlind == 0 || (id == m_targetBlind && command == Command::My)))
+    if (m_radioReady && m_transmitProfile && (m_targetBlind == 0 || (id == m_targetBlind && command == Command::My)))
     {
         startedMs  = esp_timer_get_time() / 1000; // Approximate when the first frame starts.
         result     = m_transmitter.Send(m_radio, id, command);
@@ -521,7 +524,7 @@ SomfyController::Status SomfyController::GetStatus(uint32_t id) const
 {
     Status status = m_transmitter.GetStatus(id);
 
-    status.ready  = status.ready && m_transmitProfile;
+    status.ready  = status.ready && m_radioReady && m_transmitProfile;
     return status;
 }
 
@@ -529,7 +532,7 @@ SomfyController::Blinds SomfyController::GetBlinds() const
 {
     Blinds blinds = m_transmitter.GetBlinds();
 
-    if (!m_transmitProfile)
+    if (!m_radioReady || !m_transmitProfile)
     {
         for (Status &blind : blinds)
         {
@@ -542,7 +545,7 @@ SomfyController::Blinds SomfyController::GetBlinds() const
 void SomfyController::StartDiscovery(uint64_t nowMs)
 {
     m_discovery        = {};
-    m_discovery.active = true;
+    m_discovery.active = m_radioReady;
     m_discoveryStartMs = nowMs;
 }
 

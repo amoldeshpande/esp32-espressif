@@ -94,6 +94,7 @@ class SomfyHttp final
         std::array<int, SomfyController::Blinds{}.size()> positions;
         std::array<int, SomfyController::Blinds{}.size()> targets;
         SomfyController::Discovery                        discovery;
+        bool                                              radioReady;
         // Keep the latest 16 completed requests in RAM. Only the radio task writes these.
         std::array<Completion, 16>                        completions;
         uint32_t                                          lastCompletedId;
@@ -106,6 +107,7 @@ class SomfyHttp final
     esp_err_t        networkRequest(httpd_req_t *request);
 
     void             publish(uint64_t nowMs);
+    static bool      needsRadio(Operation operation);
 
     SomfyController &m_controller;
     QueueHandle_t    m_requests  = nullptr;

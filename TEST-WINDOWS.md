@@ -8,6 +8,24 @@ The receiver uses GPIO18 for SCK, GPIO19 for MISO, GPIO23 for MOSI, GPIO5 for CS
 
 The receiver starts at 433.42 MHz with a 270.83 kHz receive filter and zero frequency offset. The monitor prints the register readback, RX state, and checksummed Somfy frames. Keys **1–4** select the receiver profiles shown at startup.
 
+## Start with the radio disconnected
+
+Power off before disconnecting the CC1101. Boot the bridge with the
+radio disconnected and verify that it joins Wi-Fi and serves the page.
+The page should show that the radio is unavailable. Existing blinds,
+groups, and configuration backups should remain accessible.
+
+`GET /api/radio` should return `{"ready":false,"error":"radio_unavailable"}`.
+A valid movement, pairing, discovery, position, motor My programming,
+or group-command request should return HTTP 503 with
+`{"error":"radio_unavailable"}`. Verify that the next rolling code
+does not advance for these rejected requests.
+
+Power off, reconnect the CC1101, and reboot. Verify that
+`GET /api/radio` returns `{"ready":true,"error":null}`, then test a
+movement command. When updating by OTA, a disconnected CC1101 alone
+should not trigger firmware rollback if storage and HTTP startup succeed.
+
 ## Pair and control one RTS blind
 
 The serial keys control blind 1 using standard 56-bit RTS transmission. A previously saved bench remote migrates to blind 1 with its existing address and next rolling code.

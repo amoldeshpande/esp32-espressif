@@ -95,7 +95,7 @@ namespace TI_CC1101
         }
         m_ISRQueueHandle = deviceConfig.InterruptQueue;
 
-        CBRA(m_spiMaster->ResetDevice());
+        CBR(m_spiMaster->ResetDevice());
         regConfig();
         configure();
 
@@ -111,11 +111,11 @@ namespace TI_CC1101
         {
             ESP_LOGE(TAG, "Unexpected CC1101 part number or version");
         }
-        CBRA(partNumber == kPartNumber && chipVersion == kChipVersion);
+        CBR(partNumber == kPartNumber && chipVersion == kChipVersion);
 
         if (m_deviceConfig.PacketFmt == PacketFormat::AsyncSerialMode)
         {
-            CBRA(verifyAsyncConfiguration());
+            CBR(verifyAsyncConfiguration());
         }
 
     Error:
@@ -180,15 +180,15 @@ namespace TI_CC1101
         gpioConfig.pull_down_en = GPIO_PULLDOWN_DISABLE;
 
         ESP_LOGD(TAG, "%s gpioconfig pin mask is " HEX_FMT, __FUNCTION__, (int)gpioConfig.pin_bit_mask);
-        CERA(gpio_config(&gpioConfig));
+        CER(gpio_config(&gpioConfig));
 
         result = gpio_install_isr_service(0);
         if (result != ESP_ERR_INVALID_STATE)
         {
-            CERA(result);
+            CER(result);
         }
 
-        CERA(gpio_isr_handler_add(m_deviceConfig.RxPin, gpioISR, this));
+        CER(gpio_isr_handler_add(m_deviceConfig.RxPin, gpioISR, this));
 
         // Turn on the radio for receive
         if (!enableReceiveMode())
@@ -924,7 +924,7 @@ namespace TI_CC1101
         }
         address |= kSpiHeaderReadBit;
 
-        CBRA(m_spiMaster->ReadRegister(address,value));
+        CBR(m_spiMaster->ReadRegister(address,value));
 
     Error:
         if (!bRet)

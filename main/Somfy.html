@@ -31,6 +31,7 @@
   <div id="online" hidden>
     <section>
       <h2>Blinds</h2>
+      <p id="radio-status" role="status"></p>
       <form id="add-blind">
         <label>Blind name<input id="blind-name" required maxlength="32"></label>
         <button id="add-button">Add blind</button>
@@ -93,6 +94,7 @@
 <script>
   const byId = id => document.getElementById(id);
   let busy = false;
+  let radioReady = false;
   let refreshing = false;
   let reopening = false;
   let lastBlindList = '';
@@ -123,7 +125,7 @@
     byId('join-button').disabled = busy;
     byId('restore-button').disabled = busy;
     byId('firmware-button').disabled = busy || !selectedFirmware || Boolean(pendingFirmware);
-    byId('scan').disabled = busy;
+    byId('scan').disabled = busy || !radioReady;
     byId('reopen').disabled = busy;
     byId('add-button').disabled = busy;
     byId('save-group').disabled = busy;
@@ -160,7 +162,8 @@
     if (blind.pairing === 'paired') {
       detail.textContent = 'Remote ' + blind.address + (blind.ready
         ? ' - Paired. Use the controls to test movement.'
-        : ' - Paired. Control is unavailable. Check radio profile 1.');
+        : radioReady ? ' - Paired. Control is unavailable. Check radio profile 1.'
+                     : ' - Paired. Radio unavailable.');
       detail.textContent += blind.remoteAddress
         ? ' Group channel: ' + blind.remoteAddress + '.'
         : ' No group channel linked.';
@@ -333,6 +336,10 @@
   }
 
   async function readControls() {
+    const radio = await api('/radio', {});
+    radioReady = radio.ready;
+    byId('radio-status').textContent = radioReady ? '' :
+      'Radio unavailable. Check CC1101 power and SPI wiring, then restart the bridge.';
     await readBlinds();
     await readBlindGroups();
     const scan = await api('/discovery', {});

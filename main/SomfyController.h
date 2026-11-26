@@ -17,7 +17,7 @@
 #include "SomfyTransmitter.h"
 
 // Owns command execution for saved blinds. Call on the radio task,
-// with the radio initialized on the transmit profile before constructing this module.
+// Radio availability is supplied at initialization; saved blind configuration remains accessible without it.
 class SomfyController final
 {
   public:
@@ -59,7 +59,8 @@ class SomfyController final
 
     explicit SomfyController(TI_CC1101::CC1101Device &radio)
         : m_radio(radio) {}
-    bool                       Init(gpio_num_t txPin);
+    bool                       Init(gpio_num_t txPin, bool radioReady);
+    bool                       RadioReady() const { return m_radioReady; }
     bool                       RetuneReceive(float frequencyMHz, float bandwidthKHz, int8_t offsetSteps, bool transmitProfile);
     uint32_t                   AddBlind(const char *name);
     bool                       RenameBlind(uint32_t id, const char *name);
@@ -99,6 +100,7 @@ class SomfyController final
     TI_CC1101::CC1101Device &m_radio;
     SomfyTransmitter         m_transmitter;
     SomfyReceiver            m_receiver;
+    bool                     m_radioReady      = false;
     bool                     m_transmitProfile = true;
     Discovery                m_discovery;
     uint64_t                 m_discoveryStartMs = 0;

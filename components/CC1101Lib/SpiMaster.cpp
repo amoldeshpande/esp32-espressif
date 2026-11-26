@@ -90,7 +90,7 @@ namespace TI_CC1101
         ret = spi_bus_initialize(host_id, &busConfig, kDmaChannelToUse);
 
         ESP_LOGI(TAG, "spi_bus_initialize() returned %d", ret);
-        CERA(ret);
+        CER(ret);
 
         ret = spi_bus_add_device(host_id, &deviceConfig, &m_DeviceHandle);
         ESP_LOGI(TAG, "spi_bus_add_device() returned %d", ret);
@@ -98,7 +98,7 @@ namespace TI_CC1101
         {
             spi_bus_free(host_id);
         }
-        CERA(ret);
+        CER(ret);
 
     Error:
         if (!bRet)

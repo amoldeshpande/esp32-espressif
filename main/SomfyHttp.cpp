@@ -134,6 +134,7 @@ void SomfyHttp::publish(uint64_t nowMs)
 {
     if (m_snapshots)
     {
+        m_snapshot.radioReady = m_controller.RadioReady();
         m_snapshot.blinds = m_controller.GetBlinds();
         m_snapshot.blindGroups = m_controller.GetBlindGroups();
         for (uint32_t id = 1; id <= m_snapshot.blinds.size(); ++id)
@@ -147,6 +148,26 @@ void SomfyHttp::publish(uint64_t nowMs)
     }
 }
 
+bool SomfyHttp::needsRadio(Operation operation)
+{
+    bool required = false;
+
+    switch (operation)
+    {
+        case Operation::Command:
+        case Operation::Discovery:
+        case Operation::SetPosition:
+        case Operation::ProgramFavorite:
+        case Operation::GroupCommand:
+        case Operation::BlindGroupCommand:
+            required = true;
+            break;
+        default:
+            break;
+    }
+    return required;
+}
+
 void SomfyHttp::Poll(uint64_t nowMs)
 {
     const Request &request = m_radioRequest;
@@ -158,7 +179,11 @@ void SomfyHttp::Poll(uint64_t nowMs)
     }
     if (m_requests && xQueueReceive(m_requests, &m_radioRequest, 0) == pdTRUE)
     {
-        if (m_network.GetStatus().mode == SomfyNetwork::Mode::Online)
+        if (needsRadio(request.operation) && !m_controller.RadioReady())
+        {
+            completion.setupResult = "radio_unavailable";
+        }
+        else if (m_network.GetStatus().mode == SomfyNetwork::Mode::Online)
         {
             switch (request.operation)
             {
@@ -727,7 +752,13 @@ esp_err_t SomfyHttp::get(httpd_req_t *request)
     const SomfyController::Remote *remote;
 
     xQueuePeek(m_snapshots, &m_httpSnapshot, 0);
-    if (strcmp(request->uri, "/api/backup") == 0)
+    if (strcmp(request->uri, "/api/radio") == 0)
+    {
+        result = sendJson(request, "200 OK", m_httpSnapshot.radioReady
+                                               ? R"({"ready":true,"error":null})"
+                                               : R"({"ready":false,"error":"radio_unavailable"})");
+    }
+    else if (strcmp(request->uri, "/api/backup") == 0)
     {
         httpd_resp_set_type(request, "application/octet-stream");
         httpd_resp_set_hdr(request, "Cache-Control", "no-store");
@@ -1127,6 +1158,9 @@ esp_err_t SomfyHttp::post(httpd_req_t *request)
     }
 
     status   = "503 Service Unavailable";
+    response = R"({"error":"radio_unavailable"})";
+    xQueuePeek(m_snapshots, &m_httpSnapshot, 0);
+    CBR(!needsRadio(pending.operation) || m_httpSnapshot.radioReady);
     response = R"({"error":"request_ids_exhausted"})";
     // IDs are consecutive for accepted requests and do not wrap within a boot.
     CBR(m_lastAcceptedId < UINT32_MAX);

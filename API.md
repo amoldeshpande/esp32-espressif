@@ -2,6 +2,20 @@
 
 Use `http://<ESP32 LAN address>` after Wi-Fi setup. The LAN API uses no login or token. Send JSON bodies with `Content-Type: application/json`. An empty body means zero bytes. Browser POST requests with an `Origin` header must match the device origin.
 
+## Radio availability
+
+`GET /api/radio` returns `{"ready":true,"error":null}` when radio
+initialization succeeds, or `{"ready":false,"error":"radio_unavailable"}`
+when it fails. The bridge keeps Wi-Fi and HTTP available when the
+CC1101 is missing or does not initialize. Saved configuration, backup,
+restore, and firmware updates remain accessible.
+
+When unavailable, movement commands, pairing signals, position moves,
+motor My programming, group commands, and starting discovery return
+HTTP 503 with `{"error":"radio_unavailable"}`. No request ID is
+allocated. Saved blinds report `ready:false`. Correct the radio wiring
+with power disconnected, then restart the bridge to initialize it again.
+
 ## Blinds and discovery
 
 | Method and path | Body | Result |

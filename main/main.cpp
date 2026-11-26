@@ -58,11 +58,11 @@ namespace
 static void     processTransmitKey(SomfyController &controller, char key);
 static uint64_t monotonicMs();
 static void     logTransmitStatus(const SomfyController &controller);
-static void     receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin, gpio_num_t txPin);
+static void     receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin,
+                                   gpio_num_t txPin, bool radioReady);
 
 extern "C" void app_main(void)
 {
-    SomfyFirmware             firmware;
     static CC1101Device        cc1101Device;
     // 256 entries accommodate two edges per bit of an 80-bit frame, plus the preamble.
     const QueueHandle_t        edgeQueue = xQueueCreate(256, sizeof(uint32_t));
@@ -105,27 +105,23 @@ extern "C" void app_main(void)
     CBR(edgeQueue != nullptr);
 
     spiMaster = std::make_shared<SpiMaster>();
-    CBRA(spiMaster->Init(spiConfig));
-    CBRA(cc1101Device.Init(spiMaster, somfyRadioConfig));
-    CBRA(cc1101Device.BeginReceive());
-    receiveSomfyFrames(cc1101Device, edgeQueue, somfyRadioConfig.RxPin, somfyRadioConfig.TxPin);
+    CBR(spiMaster->Init(spiConfig));
+    CBR(cc1101Device.Init(spiMaster, somfyRadioConfig));
+    CBR(cc1101Device.BeginReceive());
 
 Error:
-    if (!bRet && edgeQueue)
-    {
-        ESP_LOGE(TAG, "Radio initialization failed. Check CC1101 power and SPI wiring.");
-        vQueueDelete(edgeQueue);
-    }
     if (!bRet)
     {
-        firmware.CheckBoot(false);
+        ESP_LOGE(TAG, "Radio initialization failed. Check CC1101 power and SPI wiring. Continuing with Wi-Fi and HTTP.");
     }
+    receiveSomfyFrames(cc1101Device, edgeQueue, somfyRadioConfig.RxPin, somfyRadioConfig.TxPin, bRet);
 }
 
-static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin, gpio_num_t txPin)
+static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQueue, gpio_num_t rxPin,
+                               gpio_num_t txPin, bool radioReady)
 {
     bool consoleReady;
-    bool radioReady;
+    bool transmitReady;
     bool httpReady;
     char activeProfile = kDefaultProfileKey;
     // The controller lives for the receive loop. Keep the registry and radio buffers off the main-task stack.
@@ -145,19 +141,23 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
     int                        peakRssi = kMinRssiDbm;
     char                       key;
 
-    radioReady = controller.Init(txPin);
-    if (!radioReady)
+    transmitReady = controller.Init(txPin, radioReady);
+    if (!transmitReady)
     {
-        ESP_LOGE(TAG, "Transmit setup failed; continuing with reception only");
+        ESP_LOGE(TAG, "Transmit setup failed; continuing with available services");
     }
     logTransmitStatus(controller);
     httpReady = http.Start(monotonicMs());
-    http.CheckFirmware(radioReady && httpReady);
+    // Missing external hardware must not roll back a firmware image with working storage and HTTP.
+    http.CheckFirmware(transmitReady && httpReady);
     if (!httpReady)
     {
         ESP_LOGE(TAG, "Continuing with serial control");
     }
-    ESP_LOGI(TAG, "Listening for Somfy RTS on GPIO%d", rxPin);
+    if (radioReady)
+    {
+        ESP_LOGI(TAG, "Listening for Somfy RTS on GPIO%d", rxPin);
+    }
     consoleReady = fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) != -1;
     if (consoleReady)
     {
@@ -177,7 +177,7 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
             vTaskDelay(1);
             continue;
         }
-        if (xQueueReceive(edgeQueue, &timestamp, pdMS_TO_TICKS(kRssiSampleIntervalMs)) == pdTRUE)
+        if (radioReady && xQueueReceive(edgeQueue, &timestamp, pdMS_TO_TICKS(kRssiSampleIntervalMs)) == pdTRUE)
         {
             ++edgeCount;
             decodeResult = controller.OnEdge(timestamp, frame);
@@ -195,6 +195,10 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
             }
         }
 
+        if (!radioReady)
+        {
+            vTaskDelay(pdMS_TO_TICKS(kRssiSampleIntervalMs)); // Keep servicing HTTP while the radio is unavailable.
+        }
         now = xTaskGetTickCount();
         if (now - lastRssiSample >= pdMS_TO_TICKS(kRssiSampleIntervalMs))
         {
@@ -230,11 +234,14 @@ static void receiveSomfyFrames(CC1101Device &cc1101Device, QueueHandle_t edgeQue
             controller.PollPosition(monotonicMs());
             http.Poll(monotonicMs());
             now = xTaskGetTickCount();
-            peakRssi       = std::max(peakRssi, cc1101Device.ReadRssiDbm());
+            if (radioReady)
+            {
+                peakRssi = std::max(peakRssi, cc1101Device.ReadRssiDbm());
+            }
             lastRssiSample = now;
         }
         // Report the receiver statistics in two-second windows.
-        if (now - lastReport >= pdMS_TO_TICKS(2'000))
+        if (radioReady && now - lastReport >= pdMS_TO_TICKS(2'000))
         {
             sample = controller.TakeDiagnostics();
             ESP_LOGI(TAG, "RX 2s: profile=%c, edges=%" PRIu32 ", peak RSSI=%d dBm, syncs=%u, timing aborts=%u, max bits=%u,"
